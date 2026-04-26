@@ -11,7 +11,8 @@ Backend-сервис для генерации Streamlit-приложений н
 1. Загрузить CSV-файл на backend
 2. Получить metadata (названия колонок)
 3. Использовать эти данные в визуальном конструкторе
-4. Сгенерировать готовый Streamlit-проект (.zip)
+4. Предпросмотреть дашборд (preview)
+5. Сгенерировать готовый Streamlit-проект (.zip)
 
 ---
 
@@ -26,16 +27,40 @@ Frontend (React)
         ↓
  UI Builder → JSON schema
         ↓
- POST /generate
-        ↓
- ZIP (app.py + data.csv)
+       ├──────────────▶ POST /preview
+       │                   ↓
+       │              Streamlit runtime
+       │
+       └──────────────▶ POST /generate
+                           ↓
+                    ZIP (app.py + data.csv)
 ```
 
 ---
 
-## 📁 Хранение файлов (локально)
+## 🧠 Основная идея проекта
 
-Датасеты сохраняются в файловой системе:
+Ключевая архитектурная концепция:
+
+```
+Editor state (frontend)
+        ↓
+Normalized JSON schema (contract)
+        ↓
+Backend renderers
+        ↓
+ ├── runtime preview (Streamlit)
+ └── final code (app.py)
+```
+
+👉 Один и тот же `schema` используется для:
+
+* preview (runtime исполнение)
+* генерации итогового кода
+
+---
+
+## 📁 Структура файлов после скачивания
 
 ```
 storage/datasets/<datasetId>/
@@ -43,8 +68,8 @@ storage/datasets/<datasetId>/
   meta.json
 ```
 
-- `data.csv` — сам файл
-- `meta.json` — metadata (колонки, имя, дата загрузки)
+* `data.csv` — CSV файл
+* `meta.json` — metadata (колонки, имя, дата загрузки)
 
 ---
 
@@ -114,9 +139,10 @@ http://127.0.0.1:8000/docs
 Загрузка CSV-файла на backend.
 
 #### Request:
+
 `multipart/form-data`
 
-- `dataset` — CSV файл
+* `dataset` — CSV файл
 
 #### Response:
 
@@ -137,27 +163,52 @@ http://127.0.0.1:8000/docs
 
 Получение metadata датасета.
 
-#### Response:
-
-```json
-{
-  "datasetId": "uuid",
-  "name": "sales.csv",
-  "fields": ["date", "sales", "region"]
-}
-```
-
 ---
 
 ### 🔹 DELETE `/datasets/{datasetId}`
 
 Удаление датасета с backend.
 
+---
+
+## 👀 Preview (предпросмотр)
+
+---
+
+### 🔹 POST `/preview`
+
+Создаёт preview-сессию.
+
+#### Request:
+
+```json
+{
+  "schema": { ... },
+  "datasetId": "uuid"
+}
+```
+
 #### Response:
 
 ```json
 {
-  "deleted": true
+  "sessionId": "uuid",
+  "previewUrl": "http://localhost:8501/?session_id=uuid"
+}
+```
+
+---
+
+### 🔹 GET `/preview/{sessionId}`
+
+Используется Streamlit runtime.
+
+#### Response:
+
+```json
+{
+  "schema": { ... },
+  "datasetPath": "storage/datasets/<datasetId>/data.csv"
 }
 ```
 
@@ -218,46 +269,118 @@ streamlit run app.py
 
 ---
 
-## ⚠️ Важно
+# 📄 JSON Schema (v1)
 
-- CSV хранится на backend локально
-- datasetId используется для связи frontend ↔ backend
-- после удаления датасета генерация станет невозможной
-- backend не требует повторной загрузки CSV в Streamlit
+Frontend передаёт на backend нормализованную структуру:
+
+```json
+{
+  "dashboard": {
+    "title": "Untitled project"
+  },
+  "dataSource": {
+    "datasetId": "uuid",
+    "name": "sales.csv",
+    "fields": ["date", "department", "sales"]
+  },
+  "filters": [
+    {
+      "type": "selectbox",
+      "field": "department",
+      "title": "Department",
+      "order": 1,
+      "scope": "global"
+    }
+  ],
+  "views": [
+    {
+      "type": "line_chart",
+      "x": "date",
+      "y": "sales",
+      "title": "Sales",
+      "order": 2
+    }
+  ]
+}
+```
+
+---
+
+## ⚙️ Execution model (важно)
+
+Текущий pipeline выполнения:
+
+```
+schema
+  ↓
+(в перспективе) execution plan
+  ↓
+runtime_render → Streamlit preview
+code_render → app.py
+```
+
+👉 В будущем планируется выделение отдельного слоя `execution plan`,
+чтобы избежать дублирования логики между runtime и code generation.
 
 ---
 
 ## 🧩 Поддерживаемые компоненты
 
-| Компонент   | Описание |
-|------------|--------|
+| Компонент  | Описание          |
+| ---------- | ----------------- |
 | selectbox  | Глобальный фильтр |
-| line_chart | Линейный график |
+| line_chart | Линейный график   |
 | bar_chart  | Столбчатый график |
-| metric     | Метрика |
+| metric     | Метрика           |
 
 ---
 
-## 🛠 Технологии
+## ⚠️ Ограничения
 
-- FastAPI
-- Pandas
-- Uvicorn
-- Streamlit (генерируемый код)
+* preview-сессии хранятся в памяти (in-memory)
+* поддерживается один dataset
+* layout (grid) пока отсутствует
+* ограниченный набор компонентов
+
+---
+
+## 🛠 Внутренние сервисы backend
+
+```
+dataset_service       → работа с CSV
+preview_service       → хранение preview sessions
+preview_runtime       → запуск Streamlit процесса
+generator             → сборка app.py
+renderers/            → runtime и code rendering
+```
+
+---
+
+## 🧠 Важные архитектурные принципы
+
+* schema — единый источник правды
+* preview и generate используют одну и ту же модель данных
+* backend не зависит от frontend состояния напрямую
+* итоговый app.py полностью автономен
+
+---
+
+## 🧪 Dev notes
+
+* preview использует отдельный Streamlit процесс (порт 8501)
+* FastAPI и Streamlit работают независимо
+* при использовании `--reload` возможны дубли процессов Streamlit
+* рекомендуется в будущем перейти на lifecycle (lifespan)
 
 ---
 
 ## 🔮 Планы развития
 
-- Поддержка layout (columns, grid)
-- Preview через Streamlit runtime
-- Проекты (projectId)
-- Хранение в S3 / Object Storage
-- Авторизация пользователей
-- Версионирование дашбордов
-
----
-
-## 📄 Лицензия
-
-MIT
+* Валидация schema через Pydantic
+* Execution plan (единая логика для renderers)
+* Aggregations (mean, count, min, max)
+* Layout (columns / grid)
+* Расширение компонентов
+* Кэширование preview
+* Хранение проектов
+* Облачное хранилище
