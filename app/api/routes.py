@@ -1,10 +1,13 @@
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse, StreamingResponse
-from app.services.generator import generate_streamlit_code
+
 
 import io
 import zipfile
 
+# Services
+from app.services.generator_service import generate_streamlit_code
+from app.services.preview_service import preview_service
 from app.services.dataset_service import (
     delete_dataset,
     get_dataset_meta,
@@ -35,7 +38,6 @@ async def get_dataset(dataset_id: str):
 
     return meta
 
-
 @router.delete("/datasets/{dataset_id}")
 async def remove_dataset(dataset_id: str):
     deleted = delete_dataset(dataset_id)
@@ -44,6 +46,31 @@ async def remove_dataset(dataset_id: str):
         raise HTTPException(status_code=404, detail="Dataset not found")
 
     return {"deleted": True}
+
+
+
+# ПРЕВЬЮ ДАШБОРДА
+@router.post("/preview")
+async def create_preview(payload: dict):
+    try:
+        result = preview_service.create_preview(
+            schema=payload.get("schema"),
+            dataset_id=payload.get("datasetId"),
+        )
+        return result
+
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/preview/{session_id}")
+async def get_preview(session_id: str):
+    try:
+        return preview_service.get_preview(session_id)
+
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
 
 
 # ГЕНЕРАЦИЯ STREAMLIT КОДА
