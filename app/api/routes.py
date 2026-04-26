@@ -18,6 +18,7 @@ router = APIRouter()
 @router.post("/datasets/upload")
 async def upload_dataset(dataset: UploadFile = File(...)):
     try:
+        # Возвращает мета данные датасета
         return save_dataset(dataset)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
