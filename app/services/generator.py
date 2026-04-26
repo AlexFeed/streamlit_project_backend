@@ -1,25 +1,31 @@
+# app/services/generator.py
+
+
 # =========================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # =========================
 
-def indent(lines: list[str], level: int = 1) -> list[str]:
-    """
-    Добавляет отступы (4 пробела * level) к каждой строке.
-    Используется для вложенных блоков, например внутри if uploaded_file is not None.
-    """
-    prefix = "    " * level
-    return [f"{prefix}{line}" if line else "" for line in lines]
-
-
 def safe_string(value: str | None, fallback: str = "") -> str:
     """
-    Защищает строку для вставки в Python-код:
-    - если None → подставляет fallback
-    - экранирует одинарные кавычки
+    Подготавливает строку для безопасной вставки в генерируемый Python-код.
     """
     if value is None:
         return fallback
+
     return str(value).replace("'", "\\'")
+
+
+def safe_variable_name(value: str) -> str:
+    """
+    Преобразует название поля в безопасное имя переменной Python.
+    Например: 'product-category' -> 'product_category'
+    """
+    result = str(value)
+
+    for symbol in [" ", "-", ".", ",", ":", ";", "/", "\\"]:
+        result = result.replace(symbol, "_")
+
+    return result
 
 
 # =========================
@@ -28,47 +34,50 @@ def safe_string(value: str | None, fallback: str = "") -> str:
 
 def generate_imports() -> list[str]:
     """
-    Генерирует импорт библиотек для Streamlit-приложения.
+    Генерирует импорты для итогового Streamlit-приложения.
     """
     return [
-        "import streamlit as st",
+        "from pathlib import Path",
+        "",
         "import pandas as pd",
+        "import streamlit as st",
         "",
     ]
 
 
 def generate_dashboard_header(schema: dict) -> list[str]:
     """
-    Генерирует заголовок страницы (st.title).
-    Берётся из schema.dashboard.title.
+    Генерирует заголовок дашборда.
     """
-    title = safe_string(schema.get("dashboard", {}).get("title"), "Generated Dashboard")
+    title = safe_string(
+        schema.get("dashboard", {}).get("title"),
+        "Generated Dashboard",
+    )
+
     return [
         f"st.title('{title}')",
         "",
     ]
 
 
-def generate_file_loader() -> list[str]:
+def generate_dataframe_setup(schema: dict) -> list[str]:
     """
-    Генерирует загрузчик CSV-файла.
-    Весь остальной код будет выполняться внутри условия if uploaded_file is not None.
+    Генерирует код загрузки CSV из папки data рядом с app.py.
     """
+    dataset_name = safe_string(
+        schema.get("dataSource", {}).get("name"),
+        "data.csv",
+    )
+
     return [
-        "uploaded_file = st.file_uploader('Загрузите CSV файл', type=['csv'])",
+        f"DATA_PATH = Path(__file__).parent / 'data' / '{dataset_name}'",
         "",
-        "if uploaded_file is not None:",
-    ]
-
-
-def generate_dataframe_setup() -> list[str]:
-    """
-    Генерирует код чтения CSV и создания filtered_df.
-    filtered_df — это копия df, к которой будут применяться фильтры.
-    """
-    return [
+        "if not DATA_PATH.exists():",
+        "    st.error(f'CSV файл не найден: {DATA_PATH}')",
+        "    st.stop()",
+        "",
         "try:",
-        "    df = pd.read_csv(uploaded_file)",
+        "    df = pd.read_csv(DATA_PATH)",
         "except Exception as e:",
         "    st.error(f'Ошибка чтения CSV: {e}')",
         "    st.stop()",
@@ -79,33 +88,35 @@ def generate_dataframe_setup() -> list[str]:
 
 
 # =========================
-# ФИЛЬТРЫ (SELECTBOX)
+# ФИЛЬТРЫ
 # =========================
 
 def generate_selectbox_filter(component: dict) -> list[str]:
     """
-    Генерирует один selectbox-фильтр.
-
-    Логика:
-    - берём колонку из bindings.field
-    - создаём selectbox с уникальными значениями
-    - если выбрано значение ≠ 'Все', фильтруем filtered_df
+    Генерирует selectbox как глобальный фильтр для всего filtered_df.
     """
-    title = safe_string(component.get("config", {}).get("title"), "Фильтр")
-    field = safe_string(component.get("bindings", {}).get("field"), "")
+    title = safe_string(
+        component.get("config", {}).get("title"),
+        "Фильтр",
+    )
+
+    field = safe_string(
+        component.get("bindings", {}).get("field"),
+        "",
+    )
 
     if not field:
         return []
 
-    # Имя переменной (например selected_department)
-    variable_name = f"selected_{field}".replace(" ", "_").replace("-", "_")
+    variable_name = f"selected_{safe_variable_name(field)}"
 
     return [
         f"if '{field}' in df.columns:",
         f"    {variable_name} = st.selectbox(",
         f"        '{title}',",
-        f"        ['Все'] + sorted(df['{field}'].dropna().astype(str).unique().tolist())",
+        f"        ['Все'] + sorted(df['{field}'].dropna().astype(str).unique().tolist()),",
         "    )",
+        "",
         f"    if {variable_name} != 'Все':",
         f"        filtered_df = filtered_df[filtered_df['{field}'].astype(str) == {variable_name}]",
         "else:",
@@ -116,19 +127,22 @@ def generate_selectbox_filter(component: dict) -> list[str]:
 
 def generate_global_filters(components: list[dict]) -> list[str]:
     """
-    Проходит по всем компонентам и выбирает только selectbox.
-    Генерирует блок фильтров (глобальных для всего DataFrame).
+    Генерирует блок глобальных фильтров.
+    Все selectbox-компоненты применяются к одному общему filtered_df.
     """
-    lines: list[str] = []
+    filter_components = [
+        component
+        for component in components
+        if component.get("type") == "selectbox"
+    ]
 
-    filter_components = [c for c in components if c.get("type") == "selectbox"]
     if not filter_components:
-        return lines
+        return []
 
-    lines.extend([
+    lines = [
         "st.subheader('Фильтры')",
         "",
-    ])
+    ]
 
     for component in filter_components:
         lines.extend(generate_selectbox_filter(component))
@@ -137,22 +151,27 @@ def generate_global_filters(components: list[dict]) -> list[str]:
 
 
 # =========================
-# ВИЗУАЛИЗАЦИЯ
+# ВИЗУАЛЬНЫЕ КОМПОНЕНТЫ
 # =========================
 
 def generate_line_chart(component: dict) -> list[str]:
     """
     Генерирует линейный график.
-
-    Логика:
-    - берём x и y поля
-    - фильтруем NaN
-    - делаем x индексом
-    - строим st.line_chart
     """
-    title = safe_string(component.get("config", {}).get("title"), "Линейный график")
-    x_field = safe_string(component.get("bindings", {}).get("xField"), "")
-    y_field = safe_string(component.get("bindings", {}).get("yField"), "")
+    title = safe_string(
+        component.get("config", {}).get("title"),
+        "Линейный график",
+    )
+
+    x_field = safe_string(
+        component.get("bindings", {}).get("xField"),
+        "",
+    )
+
+    y_field = safe_string(
+        component.get("bindings", {}).get("yField"),
+        "",
+    )
 
     if not x_field or not y_field:
         return []
@@ -161,13 +180,14 @@ def generate_line_chart(component: dict) -> list[str]:
         f"st.subheader('{title}')",
         f"if '{x_field}' in filtered_df.columns and '{y_field}' in filtered_df.columns:",
         f"    chart_df = filtered_df[['{x_field}', '{y_field}']].dropna().copy()",
+        "",
         "    if not chart_df.empty:",
         f"        chart_df = chart_df.set_index('{x_field}')",
         f"        st.line_chart(chart_df['{y_field}'])",
         "    else:",
-        "        st.info('Нет данных для отображения.')",
+        "        st.info('Нет данных для отображения линейного графика.')",
         "else:",
-        f"    st.warning(\"Колонки '{x_field}' или '{y_field}' не найдены.\")",
+        f"    st.warning(\"Колонки '{x_field}' и/или '{y_field}' не найдены.\")",
         "",
     ]
 
@@ -175,11 +195,21 @@ def generate_line_chart(component: dict) -> list[str]:
 def generate_bar_chart(component: dict) -> list[str]:
     """
     Генерирует столбчатый график.
-    Логика аналогична line_chart, но используется st.bar_chart.
     """
-    title = safe_string(component.get("config", {}).get("title"), "Столбчатый график")
-    x_field = safe_string(component.get("bindings", {}).get("xField"), "")
-    y_field = safe_string(component.get("bindings", {}).get("yField"), "")
+    title = safe_string(
+        component.get("config", {}).get("title"),
+        "Столбчатый график",
+    )
+
+    x_field = safe_string(
+        component.get("bindings", {}).get("xField"),
+        "",
+    )
+
+    y_field = safe_string(
+        component.get("bindings", {}).get("yField"),
+        "",
+    )
 
     if not x_field or not y_field:
         return []
@@ -188,13 +218,14 @@ def generate_bar_chart(component: dict) -> list[str]:
         f"st.subheader('{title}')",
         f"if '{x_field}' in filtered_df.columns and '{y_field}' in filtered_df.columns:",
         f"    chart_df = filtered_df[['{x_field}', '{y_field}']].dropna().copy()",
+        "",
         "    if not chart_df.empty:",
         f"        chart_df = chart_df.set_index('{x_field}')",
         f"        st.bar_chart(chart_df['{y_field}'])",
         "    else:",
-        "        st.info('Нет данных для отображения.')",
+        "        st.info('Нет данных для отображения столбчатого графика.')",
         "else:",
-        f"    st.warning(\"Колонки '{x_field}' или '{y_field}' не найдены.\")",
+        f"    st.warning(\"Колонки '{x_field}' и/или '{y_field}' не найдены.\")",
         "",
     ]
 
@@ -202,40 +233,56 @@ def generate_bar_chart(component: dict) -> list[str]:
 def generate_metric(component: dict) -> list[str]:
     """
     Генерирует метрику.
-
-    MVP-логика:
-    - берём колонку
-    - считаем сумму (sum)
-    - выводим st.metric
+    Для MVP используется сумма по выбранной колонке.
     """
-    title = safe_string(component.get("config", {}).get("title"), "Метрика")
-    value_field = safe_string(component.get("bindings", {}).get("valueField"), "")
+    title = safe_string(
+        component.get("config", {}).get("title"),
+        "Метрика",
+    )
+
+    description = safe_string(
+        component.get("config", {}).get("description"),
+        "",
+    )
+
+    value_field = safe_string(
+        component.get("bindings", {}).get("valueField"),
+        "",
+    )
 
     if not value_field:
         return []
 
-    return [
+    lines = [
+        f"st.subheader('{title}')",
         f"if '{value_field}' in filtered_df.columns:",
         f"    metric_value = filtered_df['{value_field}'].sum()",
         f"    st.metric(label='{title}', value=metric_value)",
+    ]
+
+    if description:
+        lines.append(f"    st.caption('{description}')")
+
+    lines.extend([
         "else:",
         f"    st.warning(\"Колонка '{value_field}' не найдена.\")",
         "",
-    ]
+    ])
+
+    return lines
 
 
 def generate_visual_components(components: list[dict]) -> list[str]:
     """
-    Генерирует все визуальные компоненты (кроме фильтров).
-
-    Проходит по компонентам и вызывает нужную функцию:
-    - line_chart
-    - bar_chart
-    - metric
+    Генерирует все визуальные компоненты кроме фильтров.
     """
     lines: list[str] = []
 
-    visual_components = [c for c in components if c.get("type") != "selectbox"]
+    visual_components = [
+        component
+        for component in components
+        if component.get("type") != "selectbox"
+    ]
 
     for component in visual_components:
         component_type = component.get("type")
@@ -258,16 +305,15 @@ def generate_visual_components(components: list[dict]) -> list[str]:
 
 def generate_streamlit_code(schema: dict) -> str:
     """
-    Главная функция генерации.
+    Главная функция генерации Streamlit-кода.
 
-    Шаги:
-    1. Сортируем компоненты по order
-    2. Генерируем базовые блоки
-    3. Генерируем фильтры
-    4. Генерируем визуализацию
-    5. Склеиваем всё в один Python-файл
+    Порядок:
+    1. Импорты
+    2. Заголовок
+    3. Загрузка CSV из папки data
+    4. Глобальные фильтры
+    5. Визуальные компоненты
     """
-
     components = sorted(
         schema.get("components", []),
         key=lambda item: item.get("order", 0),
@@ -275,24 +321,10 @@ def generate_streamlit_code(schema: dict) -> str:
 
     code: list[str] = []
 
-    # Базовые блоки
     code.extend(generate_imports())
     code.extend(generate_dashboard_header(schema))
-    code.extend(generate_file_loader())
-
-    # Тело внутри if uploaded_file is not None
-    body_lines: list[str] = []
-    body_lines.extend(generate_dataframe_setup())
-    body_lines.extend(generate_global_filters(components))
-    body_lines.extend(generate_visual_components(components))
-
-    # Добавляем отступ (внутри if)
-    code.extend(indent(body_lines, level=1))
-
-    # Поведение, если файл не загружен
-    code.extend([
-        "else:",
-        "    st.info('Загрузите CSV файл, чтобы увидеть дашборд.')",
-    ])
+    code.extend(generate_dataframe_setup(schema))
+    code.extend(generate_global_filters(components))
+    code.extend(generate_visual_components(components))
 
     return "\n".join(code)
