@@ -25,10 +25,15 @@ def safe_string(value: str | None, fallback: str = "") -> str:
     return str(value).replace("'", "\\'")
 
 
-def safe_variable_name(value: str) -> str:
-    result = str(value)
+import re
 
-    for symbol in [" ", "-", ".", ",", ":", ";", "/", "\\"]:
-        result = result.replace(symbol, "_")
+def safe_variable_name(value: str, fallback: str = "value") -> str:
+    result = re.sub(r"\W+", "_", str(value), flags=re.UNICODE).strip("_")
+
+    if not result:
+        return fallback
+
+    if result[0].isdigit():
+        result = f"_{result}"
 
     return result
