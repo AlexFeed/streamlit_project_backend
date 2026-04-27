@@ -9,8 +9,8 @@ class PreviewService:
         # in-memory storage (для MVP)
         self._sessions: Dict[str, Dict[str, Any]] = {}
 
-    def create_preview(self, schema: dict, dataset_id: str) -> dict:
-        dataset_path = get_dataset_path(dataset_id)
+    def create_preview(self, user_id: str, schema: dict, dataset_id: str) -> dict:
+        dataset_path = get_dataset_path(user_id, dataset_id)
 
         if not dataset_path:
             raise ValueError("Dataset not found")
