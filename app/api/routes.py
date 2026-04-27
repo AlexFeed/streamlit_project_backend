@@ -8,6 +8,7 @@ import zipfile
 # Services
 from app.services.generator_service import generate_streamlit_code
 from app.services.preview_service import preview_service
+from app.services import project_service
 from app.services.dataset_service import (
     delete_dataset,
     get_dataset_meta,
@@ -16,6 +17,46 @@ from app.services.dataset_service import (
 )
 
 router = APIRouter()
+
+# УПРАВЛЕНИЕ ПРОЕКТАМИ
+@router.get("/projects")
+def list_projects():
+    return project_service.list_projects()
+
+
+@router.post("/projects")
+def create_project(payload: dict):
+    return project_service.create_project(payload)
+
+
+@router.get("/projects/{project_id}")
+def get_project(project_id: str):
+    project = project_service.get_project(project_id)
+
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    return project
+
+
+@router.put("/projects/{project_id}")
+def update_project(project_id: str, payload: dict):
+    project = project_service.update_project(project_id, payload)
+
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    return project
+
+
+@router.delete("/projects/{project_id}")
+def delete_project(project_id: str):
+    deleted = project_service.delete_project(project_id)
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    return {"deleted": True}
 
 # CRUD ЗАПРОСЫ ДЛЯ ВЗАИМОДЕЙСТВИЯ С ДАТАСЕТАМИ
 @router.post("/datasets/upload")
