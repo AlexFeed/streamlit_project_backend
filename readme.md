@@ -229,13 +229,6 @@ source venv/bin/activate
 pip install -r requirements.txt
 ~~~
 
-Если используется bcrypt/passlib для авторизации, в зависимостях должны быть:
-
-~~~text
-passlib[bcrypt]==1.7.4
-bcrypt==4.0.1
-python-jose[cryptography]
-~~~
 
 ---
 
