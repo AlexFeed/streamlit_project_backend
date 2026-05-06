@@ -1,84 +1,168 @@
 import json
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from pydantic import BaseModel
+from typing import Annotated
 
-from jose import JWTError, jwt
-from passlib.context import CryptContext
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi import FastAPI, Depends, HTTPException, status
 
+from pwdlib import PasswordHash
+import jwt
+from jwt.exceptions import InvalidTokenError
+
+# Auth config
 USERS_FILE = Path("storage/users/users.json")
 
-SECRET_KEY = "dev-secret-key-change-later"
+SECRET_KEY = "59438908cf083f26877e255a08ee838128afdcd2f419364c7eab7a7a32cfd3f2"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # Неделя жизни токена
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Auth scheme
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# Password hashing configs
+password_hash = PasswordHash.recommended()
+DUMMY_HASH = password_hash.hash("dummypassword")
+
+# Token models
+class Token(BaseModel):
+    access_token: str
+    token_type: str
 
 
-def _now() -> str:
-    return datetime.utcnow().isoformat(timespec="seconds")
+class TokenData(BaseModel):
+    user_id: str | None = None
 
 
+# User models
+class User(BaseModel):
+    id: str
+    email: str
+    createdAt: datetime | None = None
+    disabled: bool | None = None
+
+class UserInDB(User):
+    passwordHash: str
+
+
+# Helper functions
+def verify_password(plain_password, hashed_password):
+    return password_hash.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    return password_hash.hash(password)
+
+def get_user_by_email(db: dict, email: str):
+    normalized_email = email.strip().lower()
+
+    for user in db.values():
+        if user["email"] == normalized_email:
+            return UserInDB(**user)
+
+    return None
+
+def get_user_by_id(db: dict, user_id: str):
+    user = db.get(user_id)
+    return UserInDB(**user) if user else None
+
+
+# Functions for work with JSON users data
 def _ensure_users_file() -> None:
     USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     if not USERS_FILE.exists():
         with USERS_FILE.open("w", encoding="utf-8") as f:
-            json.dump([], f, ensure_ascii=False, indent=2)
+            json.dump({}, f, ensure_ascii=False, indent=2)
 
 
-def _load_users() -> list[dict]:
+def _load_users() -> dict[str, dict]:
     _ensure_users_file()
 
     with USERS_FILE.open("r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def _save_users(users: list[dict]) -> None:
+def _save_users(users: dict[str, dict]) -> None:
     _ensure_users_file()
 
     with USERS_FILE.open("w", encoding="utf-8") as f:
         json.dump(users, f, ensure_ascii=False, indent=2)
 
 
-def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+# Создание токена для дальнейшей аутентефикации по нему
+def create_access_token(data: dict, expires_delta: timedelta | None = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
 
+# Получения пользователя после проверки правильности введённого email и пароля
+def authenticate_user(db, email: str, password: str):
+    user = get_user_by_email(db, email)
+    if not user:
+        # Fake verify to protect from timing attacks
+        verify_password(password, DUMMY_HASH)
+        return False
+    if not verify_password(password, user.passwordHash):
+        return False
+    return user
 
-def verify_password(password: str, password_hash: str) -> bool:
-    return pwd_context.verify(password, password_hash)
+# Получение пользователя по токену
+async def get_current_user_by_token(token: Annotated[str, Depends(oauth2_scheme)]):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        # Извлекается id текущего пользователя, зашитый в токен
+        user_id = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+        token_data = TokenData(user_id = user_id)
+    except InvalidTokenError:
+        raise credentials_exception
 
-
-def create_access_token(user_id: str) -> str:
-    expires_at = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-
-    payload = {
-        "sub": user_id,
-        "exp": expires_at,
-    }
-
-    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-
-
-def get_user_by_email(email: str) -> dict | None:
     users = _load_users()
-    normalized_email = email.strip().lower()
+    user = get_user_by_id(db=users, user_id=token_data.user_id)
+    if user is None:
+        raise credentials_exception
+    return user
 
-    return next(
-        (user for user in users if user["email"] == normalized_email),
-        None,
+# Получение только активного на данный момент пользователя
+async def get_current_active_user(
+        current_user: Annotated[User, Depends(get_current_user_by_token)],
+):
+    if current_user.disabled:
+        raise HTTPException(status_code=400, detail="Inactive user")
+    return current_user
+
+# Вход пользователя для формирования токена, с которым он дальше будет аутентефицироваться
+def login_user(email: str, password: str) -> Token:
+    users = _load_users()
+    user = authenticate_user(db=users, email=email, password=password)
+    if not user:
+        raise HTTPException(status_code=400, detail="Incorrect email or password")
+
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.id}, expires_delta=access_token_expires
+    )
+
+    return Token(
+        access_token=access_token,
+        token_type="bearer",
     )
 
 
-def get_user_by_id(user_id: str) -> dict | None:
-    users = _load_users()
-
-    return next(
-        (user for user in users if user["id"] == user_id),
-        None,
-    )
-
-
+# Регистрация нового пользователя
 def register_user(email: str, password: str) -> dict:
     email = email.strip().lower()
 
@@ -92,80 +176,28 @@ def register_user(email: str, password: str) -> dict:
         raise ValueError("Password must contain at least 6 characters")
 
     users = _load_users()
+    is_existing_user = get_user_by_email(db=users, email=email)
 
-    existing_user = next(
-        (user for user in users if user["email"] == email),
-        None,
-    )
-
-    if existing_user:
+    if is_existing_user:
         raise ValueError("User already exists")
 
-    if len(password.encode("utf-8")) > 72:
-        raise ValueError("Password is too long (max 72 bytes)")
 
-    user = {
-        "id": str(uuid.uuid4()),
+    user_id =str(uuid.uuid4())
+    user_dict = {
+        "id": user_id,
         "email": email,
-        "passwordHash": hash_password(password),
-        "createdAt": _now(),
+        "passwordHash": get_password_hash(password),
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "disabled": False,
     }
 
-    users.append(user)
+    # Добавление нового сформированного пользователя в общий файл со всеми пользователями
+    users[user_id] = user_dict
     _save_users(users)
 
-    access_token = create_access_token(user["id"])
-
-    return {
-        "user": {
-            "id": user["id"],
-            "email": user["email"],
-        },
-        "accessToken": access_token,
-    }
-
-
-def login_user(email: str, password: str) -> dict:
-    user = get_user_by_email(email)
-
-    if not user:
-        raise ValueError("Invalid email or password")
-
-    if not verify_password(password, user["passwordHash"]):
-        raise ValueError("Invalid email or password")
-
-    access_token = create_access_token(user["id"])
-
-    return {
-        "user": {
-            "id": user["id"],
-            "email": user["email"],
-        },
-        "accessToken": access_token,
-    }
-
-
-def decode_token(token: str) -> dict:
-    try:
-        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except JWTError:
-        raise ValueError("Invalid or expired token")
-
-
-def get_user_from_token(token: str) -> dict | None:
-    payload = decode_token(token)
-
-    user_id = payload.get("sub")
-
-    if not user_id:
-        return None
-
-    user = get_user_by_id(user_id)
-
-    if not user:
-        return None
-
-    return {
-        "id": user["id"],
-        "email": user["email"],
-    }
+    return User(
+        id=user_dict["id"],
+        email=user_dict["email"],
+        createdAt=user_dict["createdAt"],
+        disabled=user_dict["disabled"],
+    )
