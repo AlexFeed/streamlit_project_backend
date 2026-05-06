@@ -1,11 +1,12 @@
-import json
+﻿import json
 import uuid
 from datetime import datetime
+import shutil
 from pathlib import Path
 
 PROJECTS_DIR = Path("storage/projects")
 
-# Backend часть управления проектами с главной страницы
+# Backend С‡Р°СЃС‚СЊ СѓРїСЂР°РІР»РµРЅРёСЏ РїСЂРѕРµРєС‚Р°РјРё СЃ РіР»Р°РІРЅРѕР№ СЃС‚СЂР°РЅРёС†С‹
 PROJECTS_DIR = Path("storage/projects")
 
 
