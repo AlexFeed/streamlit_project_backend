@@ -6,10 +6,6 @@ from pathlib import Path
 
 PROJECTS_DIR = Path("storage/projects")
 
-# Backend С‡Р°СЃС‚СЊ СѓРїСЂР°РІР»РµРЅРёСЏ РїСЂРѕРµРєС‚Р°РјРё СЃ РіР»Р°РІРЅРѕР№ СЃС‚СЂР°РЅРёС†С‹
-PROJECTS_DIR = Path("storage/projects")
-
-
 def _now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
 
@@ -31,7 +27,7 @@ def create_project(user_id: str, payload: dict) -> dict:
         "userId": user_id,
         "title": payload.get("title") or "Untitled dashboard",
         "description": payload.get("description") or "",
-        "datasetMeta": payload.get("datasetMeta"),
+        "dataset": payload.get("dataset"),
         "editorState": payload.get("editorState") or {"components": []},
         "schema": payload.get("schema"),
         "createdAt": now,
@@ -68,8 +64,8 @@ def update_project(user_id: str, project_id: str, payload: dict) -> dict | None:
     if "description" in payload:
         project["description"] = payload["description"] or ""
 
-    if "datasetMeta" in payload:
-        project["datasetMeta"] = payload["datasetMeta"]
+    if "dataset" in payload:
+        project["dataset"] = payload["dataset"]
 
     if "editorState" in payload:
         project["editorState"] = payload["editorState"] or {"components": []}
@@ -107,7 +103,7 @@ def list_projects(user_id: str) -> list[dict]:
             "id": project.get("id"),
             "title": project.get("title", "Untitled dashboard"),
             "description": project.get("description", ""),
-            "datasetName": (project.get("datasetMeta") or {}).get("name"),
+            "datasetName": (project.get("dataset") or {}).get("name"),
             "createdAt": project.get("createdAt"),
             "updatedAt": project.get("updatedAt"),
         })
