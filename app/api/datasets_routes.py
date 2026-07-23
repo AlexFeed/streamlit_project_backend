@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
 from app.services import auth_service, dataset_service
 
@@ -29,6 +29,30 @@ async def get_dataset(
         raise HTTPException(status_code=404, detail="Dataset not found")
 
     return meta
+
+
+@router.get("/{dataset_id}/preview")
+async def get_dataset_preview(
+        dataset_id: str,
+        current_user: Annotated[
+            auth_service.User,
+            Depends(auth_service.get_current_active_user),
+        ],
+        limit: int = Query(default=500, ge=1, le=1000),
+):
+    try:
+        preview = dataset_service.get_dataset_preview(
+            current_user.id,
+            dataset_id,
+            limit,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+    if not preview:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    return preview
 
 
 @router.delete("/{dataset_id}")

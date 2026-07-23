@@ -4,7 +4,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 
+from app.schemas.dashboard import validate_dashboard_schema
 from app.services import auth_service, dataset_service
 from app.services.generator_service import generate_streamlit_code
 
@@ -37,7 +39,12 @@ async def generate_dashboard(payload: dict, current_user: Annotated[
     if not dataset_path or not dataset_meta:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    code = generate_streamlit_code(schema)
+    try:
+        validated_schema = validate_dashboard_schema(schema)
+    except (ValidationError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error))
+
+    code = generate_streamlit_code(validated_schema)
 
     buffer = io.BytesIO()
 
@@ -46,7 +53,7 @@ async def generate_dashboard(payload: dict, current_user: Annotated[
         zip_file.write(dataset_path, f"data/{dataset_meta['name']}")
         zip_file.writestr(
             "requirements.txt",
-            "streamlit\npandas\n",
+            "streamlit>=1.57\npandas\nstreamlit-elements==0.1.0\n",
         )
 
     buffer.seek(0)

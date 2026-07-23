@@ -6,10 +6,36 @@ from pathlib import Path
 
 import pandas as pd
 from fastapi import UploadFile
+from pandas.api.types import (
+    is_bool_dtype,
+    is_datetime64_any_dtype,
+    is_numeric_dtype,
+)
 
 # Загрузка dataset на бэкенд и извлечение мета данных (названий колонок)
 
 DATASETS_DIR = Path("storage/datasets")
+
+
+def _infer_field_type(series) -> str:
+    if is_bool_dtype(series):
+        return "boolean"
+    if is_numeric_dtype(series):
+        return "number"
+    if is_datetime64_any_dtype(series):
+        return "datetime"
+
+    non_empty = series.dropna()
+    if not non_empty.empty:
+        parsed_dates = pd.to_datetime(
+            non_empty,
+            errors="coerce",
+            format="mixed",
+        )
+        if parsed_dates.notna().mean() >= 0.9:
+            return "datetime"
+
+    return "string"
 
 
 def _now() -> str:
@@ -41,7 +67,7 @@ def save_dataset(user_id: str, file: UploadFile) -> dict:
         shutil.copyfileobj(file.file, buffer)
 
     try:
-        df = pd.read_csv(data_path, nrows=5)
+        df = pd.read_csv(data_path, nrows=100)
     except Exception as error:
         shutil.rmtree(dataset_dir)
         raise ValueError(f"Failed to read CSV: {error}")
@@ -52,6 +78,13 @@ def save_dataset(user_id: str, file: UploadFile) -> dict:
         "name": file.filename,
         "storedName": "data.csv",
         "fields": list(df.columns),
+        "fieldTypes": {
+            field: _infer_field_type(df[field])
+            for field in df.columns
+        },
+        "sampleRows": json.loads(
+            df.head(20).to_json(orient="records", date_format="iso")
+        ),
         "size": data_path.stat().st_size,
         "createdAt": _now(),
     }
@@ -79,6 +112,37 @@ def get_dataset_path(user_id: str, dataset_id: str) -> Path | None:
         return None
 
     return path
+
+
+def get_dataset_preview(
+        user_id: str,
+        dataset_id: str,
+        limit: int = 500,
+) -> dict | None:
+    path = get_dataset_path(user_id, dataset_id)
+    if not path:
+        return None
+
+    safe_limit = max(1, min(limit, 1000))
+
+    try:
+        dataframe = pd.read_csv(path, nrows=safe_limit)
+    except Exception as error:
+        raise ValueError(f"Failed to read CSV: {error}")
+
+    return {
+        "datasetId": dataset_id,
+        "fields": list(dataframe.columns),
+        "fieldTypes": {
+            field: _infer_field_type(dataframe[field])
+            for field in dataframe.columns
+        },
+        "rows": json.loads(
+            dataframe.to_json(orient="records", date_format="iso")
+        ),
+        "returnedRows": len(dataframe),
+        "limit": safe_limit,
+    }
 
 
 def delete_dataset(user_id: str, dataset_id: str) -> bool:

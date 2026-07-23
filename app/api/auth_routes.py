@@ -25,6 +25,23 @@ async def login(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]):
     # В этом случае form_data.username хранит email пользователя
     return auth_service.login_user(email=form_data.username, password=form_data.password)
 
+
+# JSON-совместимый login для frontend (POST /auth/login) — принимает JSON {"email","password"}
+@router.post("/login")
+def login_json(payload: dict):
+    email = payload.get("email", "")
+    password = payload.get("password", "")
+    token = auth_service.login_user(email=email, password=password)
+
+    # Получаем объект пользователя для ответа
+    users = auth_service._load_users()
+    user = auth_service.get_user_by_email(db=users, email=email)
+
+    return {
+        "user": {"id": user.id, "email": user.email},
+        "accessToken": token.access_token,
+    }
+
 @router.get("/me")
 def auth_me(current_user: Annotated[auth_service.User, Depends(auth_service.get_current_active_user)]):
     return current_user

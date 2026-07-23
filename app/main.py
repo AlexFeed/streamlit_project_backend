@@ -22,7 +22,7 @@ app.add_middleware(
 )
 
 # Including routes
-app.include_router(auth_router)
+app.include_router(auth_router, prefix="/auth")
 app.include_router(datasets_router)
 app.include_router(projects_router)
 app.include_router(preview_router)

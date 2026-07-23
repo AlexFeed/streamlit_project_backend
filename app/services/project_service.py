@@ -4,6 +4,8 @@ from datetime import datetime
 import shutil
 from pathlib import Path
 
+from app.schemas.dashboard import validate_dashboard_schema
+
 PROJECTS_DIR = Path("storage/projects")
 
 def _now() -> str:
@@ -22,6 +24,10 @@ def create_project(user_id: str, payload: dict) -> dict:
     project_id = str(uuid.uuid4())
     now = _now()
 
+    schema = payload.get("schema")
+    if schema:
+        schema = validate_dashboard_schema(schema)
+
     project = {
         "id": project_id,
         "userId": user_id,
@@ -29,7 +35,7 @@ def create_project(user_id: str, payload: dict) -> dict:
         "description": payload.get("description") or "",
         "dataset": payload.get("dataset"),
         "editorState": payload.get("editorState") or {"components": []},
-        "schema": payload.get("schema"),
+        "schema": schema,
         "createdAt": now,
         "updatedAt": now,
     }
@@ -71,7 +77,12 @@ def update_project(user_id: str, project_id: str, payload: dict) -> dict | None:
         project["editorState"] = payload["editorState"] or {"components": []}
 
     if "schema" in payload:
-        project["schema"] = payload["schema"]
+        schema = payload["schema"]
+        project["schema"] = (
+            validate_dashboard_schema(schema)
+            if schema
+            else None
+        )
 
     project["updatedAt"] = _now()
 
