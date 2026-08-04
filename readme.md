@@ -250,7 +250,7 @@ http://127.0.0.1:8000/docs
 
 # 📡 API Endpoints
 
-Все endpoint'ы, кроме `/auth/register` и `/auth/login`, требуют авторизацию:
+Все endpoint'ы, кроме `/auth/register` и `/auth/token`, требуют авторизацию:
 
 ~~~http
 Authorization: Bearer <token>
@@ -313,7 +313,7 @@ AuthPage
 
 ---
 
-## 🔹 POST `/auth/login`
+## 🔹 POST `/auth/token`
 
 Авторизует пользователя и возвращает JWT-токен.
 

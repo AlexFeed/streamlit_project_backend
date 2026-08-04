@@ -7,7 +7,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 # Services
 from app.services import auth_service
 
-router = APIRouter()
+router = APIRouter(prefix="/auth")
 
 # УПРАВЛЕНИЕ LOGIN
 @router.post("/register")
