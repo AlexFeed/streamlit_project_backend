@@ -5,7 +5,6 @@ from collections.abc import Iterable
 GRID_COLUMNS = 12
 GRID_ROW_HEIGHT = 20
 GRID_GAP = 16
-CARD_CHROME_HEIGHT = 96
 
 
 # Базовые функции для обоих режимов генерации кода
@@ -51,9 +50,12 @@ def get_component_height(component: dict, fallback: int = 320) -> int:
 
 
 def get_component_grid_height(component: dict) -> int:
-    total_height = get_component_height(component) + CARD_CHROME_HEIGHT
     cell_height = GRID_ROW_HEIGHT + GRID_GAP
-    return max(1, (total_height + GRID_GAP + cell_height - 1) // cell_height)
+    requested_height = get_component_height(component)
+    return max(
+        4,
+        (requested_height + GRID_GAP + cell_height - 1) // cell_height,
+    )
 
 
 def pack_freeform_grid(components: Iterable[dict]) -> list[dict]:
@@ -67,7 +69,30 @@ def pack_freeform_grid(components: Iterable[dict]) -> list[dict]:
             and candidate["y"] + candidate["h"] > item["y"]
         )
 
-    for component in components:
+    ordered = sorted(components, key=lambda item: item.get("order", 0))
+    explicit = []
+    automatic = []
+
+    for component in ordered:
+        layout = component.get("layout", {})
+        if isinstance(layout.get("x"), int) and isinstance(layout.get("y"), int):
+            explicit.append(component)
+        else:
+            automatic.append(component)
+
+    for component in explicit:
+        layout = component.get("layout", {})
+        width = get_component_width(component)
+        x = max(0, min(GRID_COLUMNS - width, int(layout.get("x", 0))))
+        placed.append({
+            "x": x,
+            "y": max(0, int(layout.get("y", 0))),
+            "w": width,
+            "h": get_component_grid_height(component),
+            "component": component,
+        })
+
+    for component in automatic:
         width = get_component_width(component)
         height = get_component_grid_height(component)
         position = None
@@ -86,7 +111,7 @@ def pack_freeform_grid(components: Iterable[dict]) -> list[dict]:
             "component": component,
         })
 
-    return placed
+    return sorted(placed, key=lambda item: item["component"].get("order", 0))
 
 
 def get_summary_components(schema: dict) -> list[dict]:

@@ -11,6 +11,7 @@ import pandas as pd
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from streamlit.testing.v1 import AppTest
 
 from app.api.datasets_routes import router as datasets_router
 from app.schemas.dashboard import validate_dashboard_schema
@@ -26,6 +27,7 @@ from app.services.renderers.schema_utils import (
     get_components,
     get_row_column_widths,
     pack_component_rows,
+    pack_freeform_grid,
 )
 from app.services.renderers import preview_runtime_render
 
@@ -199,6 +201,27 @@ class LayoutTests(unittest.TestCase):
             [["chart-1", "chart-4"], ["chart-2", "chart-3"]],
         )
 
+    def test_freeform_packer_keeps_explicit_canvas_coordinates(self):
+        components = [
+            {
+                "id": "filter",
+                "order": 1,
+                "layout": {"x": 0, "y": 0, "width": 3, "height": 160},
+            },
+            {
+                "id": "chart",
+                "order": 2,
+                "layout": {"x": 3, "y": 4, "width": 9, "height": 360},
+            },
+        ]
+
+        packed = pack_freeform_grid(components)
+
+        self.assertEqual(
+            [(item["x"], item["y"], item["w"]) for item in packed],
+            [(0, 0, 3), (3, 4, 9)],
+        )
+
 
 class DataTransformTests(unittest.TestCase):
     def setUp(self):
@@ -332,14 +355,16 @@ class GeneratorTests(unittest.TestCase):
         )
 
         compile(code, "generated_app.py", "exec")
-        self.assertIn("from streamlit_elements import", code)
-        self.assertIn("dashboard.Grid", code)
-        self.assertIn("nivo.", code)
+        self.assertNotIn("from streamlit_elements import", code)
+        self.assertIn("display: grid !important", code)
+        self.assertIn("st.vega_lite_chart", code)
+        self.assertIn("@st.cache_data(show_spinner=False)", code)
         self.assertIn("'height': 360", code)
         self.assertIn("'color': '#818cf8'", code)
         self.assertIn("calculate_metric", code)
-        self.assertIn("render_filters", code)
-        self.assertIn("render_metrics", code)
+        self.assertIn("render_filter", code)
+        self.assertIn("render_metric", code)
+        self.assertIn("components_from_schema", code)
 
     def test_generates_every_supported_chart_type(self):
         for chart_type in (
@@ -372,16 +397,89 @@ class GeneratorTests(unittest.TestCase):
         )
 
         compile(code, "generated_app.py", "exec")
-        self.assertNotIn("import altair as alt", code)
+        self.assertNotIn("streamlit_elements", code)
         self.assertIn("'colorMode': 'gradient'", code)
         self.assertIn(
             "'palette': ['#fbbf24', '#f97316', '#ef4444']",
             code,
         )
-        self.assertIn("interpolate_color", code)
-        self.assertIn('colors={"datum": "data.color"}', code)
+        self.assertIn("color_encoding", code)
+        self.assertIn('"scale": {"range": palette}', code)
 
-    def test_freeform_grid_fills_space_below_short_components(self):
+    def test_generated_filter_uses_native_streamlit_widget(self):
+        code = generate_streamlit_code(
+            validate_dashboard_schema(make_schema())
+        )
+        tree = ast.parse(code)
+        state_key_function = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "component_state_key"
+        )
+        namespace = {}
+        exec(
+            compile(
+                ast.Module(body=[state_key_function], type_ignores=[]),
+                "generated_filter.py",
+                "exec",
+            ),
+            namespace,
+        )
+
+        self.assertEqual(
+            namespace["component_state_key"]({
+                "id": "selectbox-f5aa998d-8c1d-4741-9379-26eecebafa4a",
+            }),
+            "builder_filter_selectbox_f5aa998d_8c1d_4741_9379_26eecebafa4a",
+        )
+        self.assertIn("st.selectbox(", code)
+        self.assertNotIn("onChange=filter_change_handler", code)
+
+    def test_dense_x_axis_uses_evenly_distributed_tick_values(self):
+        code = generate_streamlit_code(
+            validate_dashboard_schema(make_schema())
+        )
+        tree = ast.parse(code)
+        tick_function = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "axis_tick_values"
+        )
+        namespace = {}
+        exec(
+            compile(
+                ast.Module(body=[tick_function], type_ignores=[]),
+                "generated_ticks.py",
+                "exec",
+            ),
+            namespace,
+        )
+        values = [
+            f"2026-01-{day:02d}"
+            for day in range(1, 32)
+        ]
+
+        ticks = namespace["axis_tick_values"](values, 6)
+
+        self.assertEqual(len(ticks), 6)
+        self.assertEqual(ticks[0], "2026-01-01")
+        self.assertEqual(ticks[-1], "2026-01-31")
+
+    def test_scatter_uses_fast_native_gradient_scale(self):
+        schema = make_schema()
+        schema["views"][0].update({
+            "type": "scatter_plot",
+            "colorMode": "gradient",
+        })
+
+        code = generate_streamlit_code(validate_dashboard_schema(schema))
+
+        self.assertIn('"type": "point"', code)
+        self.assertIn("chart_point_limit", code)
+        self.assertIn("downsample_frame", code)
+        self.assertIn('"scale": {"range": palette}', code)
+
+    def test_freeform_grid_preserves_canvas_positions(self):
         code = generate_streamlit_code(
             validate_dashboard_schema(make_schema())
         )
@@ -389,13 +487,13 @@ class GeneratorTests(unittest.TestCase):
         layout_functions = [
             node for node in tree.body
             if isinstance(node, ast.FunctionDef)
-            and node.name in {"grid_height", "pack_views"}
+            and node.name in {"grid_height", "pack_components"}
         ]
         namespace = {
             "GRID_COLUMNS": 12,
-            "GRID_ROW_HEIGHT": 22,
+            "GRID_ROW_HEIGHT": 20,
             "GRID_GAP": 16,
-            "CARD_CHROME_HEIGHT": 70,
+            "CARD_CHROME_HEIGHT": 96,
         }
         exec(
             compile(
@@ -406,24 +504,161 @@ class GeneratorTests(unittest.TestCase):
             namespace,
         )
         items = [
-            {"id": "metric", "order": 1, "layout": {"width": 3, "height": 160}},
-            {"id": "chart-1", "order": 2, "layout": {"width": 6, "height": 280}},
+            {"id": "metric", "order": 1, "layout": {"x": 1, "y": 2, "width": 3, "height": 160}},
+            {"id": "chart-1", "order": 2, "layout": {"x": 4, "y": 2, "width": 6, "height": 280}},
             {"id": "chart-2", "order": 3, "layout": {"width": 6, "height": 220}},
         ]
 
-        packed = namespace["pack_views"](items)
+        packed = namespace["pack_components"](items)
 
         self.assertEqual(
             [
-                (item["view"]["id"], item["x"], item["y"])
+                (item["component"]["id"], item["x"], item["y"])
                 for item in packed
             ],
             [
-                ("metric", 0, 0),
-                ("chart-1", 4, 0),
-                ("chart-2", 0, namespace["grid_height"](items[1])),
+                ("metric", 1, 2),
+                ("chart-1", 4, 2),
+                ("chart-2", 0, 13),
             ],
         )
+
+    def test_generated_dashboard_keeps_filters_in_canvas_rows(self):
+        schema = make_schema()
+        schema["filters"][0]["layout"].update({"x": 0, "y": 0})
+        schema["views"][0]["layout"].update({"x": 4, "y": 0})
+        schema["views"][1]["layout"].update({"x": 0, "y": 5})
+
+        code = generate_streamlit_code(validate_dashboard_schema(schema))
+
+        self.assertIn("placements = pack_components(components_from_schema(schema))", code)
+        self.assertIn("dashboard_grid_style(placements)", code)
+        self.assertIn('with st.container(key="dashboard_grid"):', code)
+        self.assertIn("grid_pixel_height(item[\"h\"])", code)
+        self.assertIn("render_component(", code)
+        self.assertIn('[*schema.get("filters", []), *schema.get("views", [])]', code)
+
+    def test_staggered_canvas_uses_exact_css_grid_coordinates(self):
+        code = generate_streamlit_code(
+            validate_dashboard_schema(make_schema())
+        )
+        tree = ast.parse(code)
+        names = {
+            "component_state_key",
+            "grid_height",
+            "pack_components",
+            "grid_pixel_height",
+            "card_container_key",
+            "dashboard_grid_style",
+        }
+        functions = [
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name in names
+        ]
+        namespace = {
+            "GRID_COLUMNS": 12,
+            "GRID_ROW_HEIGHT": 20,
+            "GRID_GAP": 16,
+            "CARD_CHROME_HEIGHT": 96,
+        }
+        exec(
+            compile(
+                ast.Module(body=functions, type_ignores=[]),
+                "generated_css_grid.py",
+                "exec",
+            ),
+            namespace,
+        )
+        components = [
+            {"id": "filter", "order": 1, "layout": {"x": 0, "y": 0, "width": 3, "height": 140}},
+            {"id": "metric", "order": 2, "layout": {"x": 3, "y": 0, "width": 3, "height": 140}},
+            {"id": "right-top", "order": 3, "layout": {"x": 6, "y": 0, "width": 6, "height": 392}},
+            {"id": "left-middle", "order": 4, "layout": {"x": 0, "y": 7, "width": 6, "height": 284}},
+            {"id": "right-bottom", "order": 5, "layout": {"x": 6, "y": 14, "width": 6, "height": 500}},
+            {"id": "left-bottom", "order": 6, "layout": {"x": 0, "y": 18, "width": 6, "height": 356}},
+        ]
+
+        placements = namespace["pack_components"](components)
+        style = namespace["dashboard_grid_style"](placements)
+
+        self.assertEqual(
+            [(item["x"], item["y"], item["w"], item["h"]) for item in placements],
+            [
+                (0, 0, 3, 7),
+                (3, 0, 3, 7),
+                (6, 0, 6, 14),
+                (0, 7, 6, 11),
+                (6, 14, 6, 17),
+                (0, 18, 6, 13),
+            ],
+        )
+        self.assertIn("grid-column: 7 / span 6;", style)
+        self.assertIn("grid-row: 15 / span 17;", style)
+        for component in components:
+            safe_id = component["id"].replace("-", "_")
+            self.assertIn(f"st-key-card_builder_filter_{safe_id}", style)
+
+    def test_css_grid_supports_non_sliceable_canvas_layouts(self):
+        code = generate_streamlit_code(validate_dashboard_schema(make_schema()))
+        tree = ast.parse(code)
+        names = {
+            "component_state_key",
+            "card_container_key",
+            "dashboard_grid_style",
+        }
+        functions = [
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name in names
+        ]
+        namespace = {
+            "GRID_COLUMNS": 12,
+            "GRID_ROW_HEIGHT": 20,
+            "GRID_GAP": 16,
+        }
+        exec(
+            compile(
+                ast.Module(body=functions, type_ignores=[]),
+                "generated_irregular_grid.py",
+                "exec",
+            ),
+            namespace,
+        )
+        placements = [
+            {"x": 0, "y": 0, "w": 8, "h": 6, "component": {"id": "top-left"}},
+            {"x": 8, "y": 0, "w": 4, "h": 10, "component": {"id": "top-right"}},
+            {"x": 0, "y": 6, "w": 4, "h": 8, "component": {"id": "bottom-left"}},
+            {"x": 4, "y": 10, "w": 8, "h": 4, "component": {"id": "bottom-right"}},
+        ]
+
+        style = namespace["dashboard_grid_style"](placements)
+
+        self.assertEqual(style.count("grid-column:"), len(placements))
+        self.assertEqual(style.count("grid-row:"), len(placements))
+        self.assertIn("grid-column: 5 / span 8;", style)
+        self.assertIn("grid-row: 11 / span 4;", style)
+
+    def test_generated_native_filter_changes_selected_value(self):
+        code = generate_streamlit_code(
+            validate_dashboard_schema(make_schema())
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            project_dir = Path(directory)
+            data_dir = project_dir / "data"
+            data_dir.mkdir()
+            (project_dir / "app.py").write_text(code, encoding="utf-8")
+            (data_dir / "sales.csv").write_text(
+                "date,region,sales\n2026-01-01,A,10\n2026-01-02,B,20\n",
+                encoding="utf-8",
+            )
+
+            app = AppTest.from_file(project_dir / "app.py", default_timeout=20)
+            app.run()
+            self.assertEqual(len(app.selectbox), 1)
+            app.selectbox[0].select("A").run()
+
+        self.assertEqual(app.selectbox[0].value, "A")
+        self.assertEqual(len(app.exception), 0)
 
     def test_generated_dashboard_executes_in_streamlit_bare_mode(self):
         schema = make_schema()

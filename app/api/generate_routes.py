@@ -53,7 +53,57 @@ async def generate_dashboard(payload: dict, current_user: Annotated[
         zip_file.write(dataset_path, f"data/{dataset_meta['name']}")
         zip_file.writestr(
             "requirements.txt",
-            "streamlit>=1.57\npandas\nstreamlit-elements==0.1.0\n",
+            "streamlit>=1.57\npandas>=2.2\n",
+        )
+        # Helpful files for users who download and run locally
+        zip_file.writestr(
+            "README.md",
+            """
+# Downloaded dashboard
+
+This archive contains a generated Streamlit dashboard. To run locally:
+
+1. Create a Python virtual environment (recommended):
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1  # PowerShell
+# or .venv\Scripts\activate  # CMD
+```
+
+2. Install dependencies:
+
+```powershell
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+3. Run the app:
+
+```powershell
+python -m streamlit run app.py --server.port 8501
+```
+
+If you prefer a one-click script, use `run_local.bat` (Windows) or `run_local.sh` (Linux/macOS).
+""",
+        )
+        zip_file.writestr(
+            "run_local.bat",
+            """
+@echo off
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m streamlit run app.py --server.port 8501
+""",
+        )
+        zip_file.writestr(
+            "run_local.sh",
+            """
+#!/usr/bin/env bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m streamlit run app.py --server.port 8501
+""",
         )
 
     buffer.seek(0)

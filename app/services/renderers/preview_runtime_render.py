@@ -1,5 +1,5 @@
 import streamlit as st
-from streamlit_elements import dashboard, elements, mui, nivo
+from streamlit_elements import dashboard, elements, mui, nivo, sync
 
 from app.services.renderers.data_transform import (
     calculate_metric,
@@ -18,6 +18,7 @@ _renderer_namespace = {
     "elements": elements,
     "mui": mui,
     "nivo": nivo,
+    "sync": sync,
     "calculate_metric": calculate_metric,
     "prepare_chart_data": lambda dataframe, x, y, aggregation, sort, sort_by: (
         prepare_chart_data(
