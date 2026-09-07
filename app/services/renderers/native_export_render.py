@@ -455,6 +455,10 @@ def render_chart(view, dataframe, available_height):
     elif x_type == "temporal":
         x_axis.update({"format": "%d.%m.%Y", "tickCount": max(3, min(10, int(layout_width)))})
 
+    tooltip = [
+        {"field": "label", "type": "nominal", "title": view.get("x")},
+        {"field": "y", "type": "quantitative", "title": view.get("y"), "format": ",.2f"},
+    ]
     encoding = {
         "x": {
             "field": "x",
@@ -475,31 +479,104 @@ def render_chart(view, dataframe, available_height):
             },
         },
         "color": color_encoding(view, chart_type),
-        "tooltip": [
-            {"field": "label", "type": "nominal", "title": view.get("x")},
-            {"field": "y", "type": "quantitative", "title": view.get("y"), "format": ",.2f"},
-        ],
     }
 
     if chart_type == "bar_chart":
         mark = {"type": "bar", "cornerRadiusTopLeft": 5, "cornerRadiusTopRight": 5}
-    elif chart_type == "scatter_plot":
-        mark = {"type": "point", "filled": True, "size": 64, "opacity": .78}
     elif chart_type == "area_chart":
         mark = {"type": "area", "line": True, "opacity": .3}
     else:
         mark = {"type": "line", "point": len(plot_df) <= 80, "strokeWidth": 2.5}
 
     spec = {
-        "mark": mark,
         "height": max(120, available_height),
-        "encoding": encoding,
         "config": {
             "background": "transparent",
             "view": {"stroke": None},
             "axis": {"domainColor": "#334155", "tickColor": "#334155"},
         },
     }
+    if chart_type in {"line_chart", "area_chart"}:
+        hover = {
+            "name": "hover",
+            "select": {
+                "type": "point",
+                "encodings": ["x"],
+                "nearest": True,
+                "on": "pointerover",
+                "clear": "pointerout",
+            },
+        }
+        spec["layer"] = [
+            {"mark": mark, "encoding": encoding},
+            {
+                "params": [hover],
+                "mark": {"type": "rule", "color": "#64748b", "strokeWidth": 1},
+                "encoding": {
+                    "x": encoding["x"],
+                    "opacity": {
+                        "condition": {"param": "hover", "empty": False, "value": .75},
+                        "value": 0,
+                    },
+                    "tooltip": tooltip,
+                },
+            },
+            {
+                "transform": [{"filter": {"param": "hover", "empty": False}}],
+                "mark": {
+                    "type": "point",
+                    "filled": True,
+                    "size": 125,
+                    "stroke": "#f8fafc",
+                    "strokeWidth": 1.5,
+                },
+                "encoding": {
+                    "x": encoding["x"],
+                    "y": encoding["y"],
+                    "color": encoding["color"],
+                },
+            },
+        ]
+    elif chart_type == "scatter_plot":
+        hover = {
+            "name": "hover",
+            "select": {
+                "type": "point",
+                "nearest": True,
+                "on": "pointerover",
+                "clear": "pointerout",
+            },
+        }
+        spec["layer"] = [
+            {
+                "mark": {"type": "point", "filled": True},
+                "encoding": {
+                    **encoding,
+                    "size": {
+                        "condition": {"param": "hover", "empty": False, "value": 150},
+                        "value": 64,
+                    },
+                    "opacity": {
+                        "condition": {"param": "hover", "empty": False, "value": 1},
+                        "value": .72,
+                    },
+                },
+            },
+            {
+                "params": [hover],
+                "mark": {"type": "point", "filled": True, "size": 420, "opacity": .001},
+                "encoding": {
+                    "x": encoding["x"],
+                    "y": encoding["y"],
+                    "tooltip": tooltip,
+                },
+            },
+        ]
+    else:
+        spec.update({
+            "mark": mark,
+            "encoding": {**encoding, "tooltip": tooltip},
+        })
     st.vega_lite_chart(plot_df, spec, width="stretch", theme=None)
 
 

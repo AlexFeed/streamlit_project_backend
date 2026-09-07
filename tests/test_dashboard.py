@@ -478,6 +478,20 @@ class GeneratorTests(unittest.TestCase):
         self.assertIn("chart_point_limit", code)
         self.assertIn("downsample_frame", code)
         self.assertIn('"scale": {"range": palette}', code)
+        self.assertIn('"size": 420', code)
+        self.assertIn('"nearest": True', code)
+        self.assertIn('"on": "pointerover"', code)
+
+    def test_line_and_area_charts_use_nearest_hover_guide(self):
+        code = generate_streamlit_code(
+            validate_dashboard_schema(make_schema())
+        )
+
+        self.assertIn('chart_type in {"line_chart", "area_chart"}', code)
+        self.assertIn('"type": "rule"', code)
+        self.assertIn('"encodings": ["x"]', code)
+        self.assertIn('"clear": "pointerout"', code)
+        self.assertIn('{"filter": {"param": "hover", "empty": False}}', code)
 
     def test_freeform_grid_preserves_canvas_positions(self):
         code = generate_streamlit_code(
