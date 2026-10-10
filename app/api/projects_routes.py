@@ -1,6 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import ValidationError
 
 from app.services import auth_service, project_service
 
@@ -17,7 +18,10 @@ def create_project(
         payload: dict,
         current_user: Annotated[auth_service.User, Depends(auth_service.get_current_active_user)],
 ):
-    return project_service.create_project(current_user.id, payload)
+    try:
+        return project_service.create_project(current_user.id, payload)
+    except (ValidationError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error))
 
 
 @router.get("/{project_id}")
@@ -39,11 +43,14 @@ def update_project(
         payload: dict,
         current_user: Annotated[auth_service.User, Depends(auth_service.get_current_active_user)],
 ):
-    project = project_service.update_project(
-        current_user.id,
-        project_id,
-        payload,
-    )
+    try:
+        project = project_service.update_project(
+            current_user.id,
+            project_id,
+            payload,
+        )
+    except (ValidationError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error))
 
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")

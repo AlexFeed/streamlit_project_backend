@@ -20,7 +20,9 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # Неделя жизни токена
 
 # Auth scheme
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+# tokenUrl указывает на маршрут получения токена. Роуты авторизации подключены с префиксом /auth,
+# поэтому указываем полный путь /auth/token чтобы Swagger Authorize работал корректно.
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
 
 # Password hashing configs
 password_hash = PasswordHash.recommended()
