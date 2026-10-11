@@ -23,6 +23,71 @@ Backend-сервис на базе **FastAPI** для валидации дек�
 
 ---
 
+## 🚀 Быстрый старт
+
+### 1. Клонирование
+
+~~~bash
+git clone https://github.com/AlexFeed/streamlit_project_backend.git
+cd streamlit_project_backend
+~~~
+
+### 2. Виртуальное окружение
+
+#### Windows (PowerShell / CMD)
+
+~~~powershell
+python -m venv venv
+venv\Scripts\activate
+~~~
+
+#### macOS / Linux
+
+~~~bash
+python3 -m venv venv
+source venv/bin/activate
+~~~
+
+### 3. Установка зависимостей
+
+~~~bash
+pip install -r requirements.txt
+~~~
+
+### 4. Запуск сервера
+
+~~~bash
+uvicorn app.main:app --reload
+~~~
+
+*(При старте FastAPI автоматически запускает фоновый процесс Streamlit для preview runtime на порту `8501`).*
+
+### 5. Swagger документация
+
+~~~text
+http://127.0.0.1:8000/docs
+~~~
+*(Кнопка **Authorize** в Swagger UI полностью настроена и работает через `/auth/token`).*
+
+### 6. Запуск автотестов
+
+~~~powershell
+$env:PYTHONDONTWRITEBYTECODE='1'
+.\venv\Scripts\python.exe -B -m unittest discover -s tests -v
+~~~
+
+---
+
+# 📡 API Endpoints
+
+Все endpoint'ы, кроме `/auth/register`, `/auth/token` и внутреннего `GET /preview/{sessionId}`, требуют заголовок авторизации:
+
+~~~http
+Authorization: Bearer <token>
+~~~
+
+---
+
 ## 🏗 Архитектура
 
 ~~~text
@@ -199,71 +264,6 @@ storage/projects/<userId>/<projectId>/
 ✔ пользователь видит только свои датасеты
 ✔ пользователь не может получить, удалить или использовать в генерации чужой датасет по его datasetId
 ✔ управление preview-сессией (обновление/удаление) доступно только её владельцу
-~~~
-
----
-
-## 🚀 Быстрый старт
-
-### 1. Клонирование
-
-~~~bash
-git clone https://github.com/AlexFeed/streamlit_project_backend.git
-cd streamlit_project_backend
-~~~
-
-### 2. Виртуальное окружение
-
-#### Windows (PowerShell / CMD)
-
-~~~powershell
-python -m venv venv
-venv\Scripts\activate
-~~~
-
-#### macOS / Linux
-
-~~~bash
-python3 -m venv venv
-source venv/bin/activate
-~~~
-
-### 3. Установка зависимостей
-
-~~~bash
-pip install -r requirements.txt
-~~~
-
-### 4. Запуск сервера
-
-~~~bash
-uvicorn app.main:app --reload
-~~~
-
-*(При старте FastAPI автоматически запускает фоновый процесс Streamlit для preview runtime на порту `8501`).*
-
-### 5. Swagger документация
-
-~~~text
-http://127.0.0.1:8000/docs
-~~~
-*(Кнопка **Authorize** в Swagger UI полностью настроена и работает через `/auth/token`).*
-
-### 6. Запуск автотестов
-
-~~~powershell
-$env:PYTHONDONTWRITEBYTECODE='1'
-.\venv\Scripts\python.exe -B -m unittest discover -s tests -v
-~~~
-
----
-
-# 📡 API Endpoints
-
-Все endpoint'ы, кроме `/auth/register`, `/auth/token` и внутреннего `GET /preview/{sessionId}`, требуют заголовок авторизации:
-
-~~~http
-Authorization: Bearer <token>
 ~~~
 
 ---
