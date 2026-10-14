@@ -39,9 +39,10 @@ class DataSource(BaseModel):
 
 
 class ComponentBase(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     id: str
+    dataset_id: str | None = Field(default=None, alias="datasetId")
     order: int = Field(ge=1)
     layout: Layout = Field(default_factory=Layout)
     title: str = ""
@@ -117,7 +118,7 @@ class DashboardSchema(BaseModel):
 
     version: Literal[1, 2] = 2
     dashboard: DashboardMeta
-    data_source: DataSource = Field(alias="dataSource")
+    data_sources: list[DataSource] = Field(alias="dataSources", min_length=1)
     filters: list[SelectboxFilter] = Field(default_factory=list)
     views: list[DashboardView] = Field(default_factory=list)
 

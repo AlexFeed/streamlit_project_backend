@@ -1,10 +1,11 @@
-﻿import json
+import json
 import uuid
 from datetime import datetime
 import shutil
 from pathlib import Path
 
 from app.schemas.dashboard import validate_dashboard_schema
+from app.services import dataset_service
 
 PROJECTS_DIR = Path("storage/projects")
 
@@ -33,7 +34,7 @@ def create_project(user_id: str, payload: dict) -> dict:
         "userId": user_id,
         "title": payload.get("title") or "Untitled dashboard",
         "description": payload.get("description") or "",
-        "dataset": payload.get("dataset"),
+        "datasets": payload.get("datasets") or [],
         "editorState": payload.get("editorState") or {"components": []},
         "schema": schema,
         "createdAt": now,
@@ -70,8 +71,23 @@ def update_project(user_id: str, project_id: str, payload: dict) -> dict | None:
     if "description" in payload:
         project["description"] = payload["description"] or ""
 
-    if "dataset" in payload:
-        project["dataset"] = payload["dataset"]
+    if "datasets" in payload:
+        old_ids = {
+            ds.get("datasetId")
+            for ds in (project.get("datasets") or [])
+            if ds.get("datasetId")
+        }
+        new_datasets = payload["datasets"] or []
+        new_ids = {
+            ds.get("datasetId")
+            for ds in new_datasets
+            if ds.get("datasetId")
+        }
+
+        for removed_id in old_ids - new_ids:
+            dataset_service.delete_dataset(user_id, removed_id)
+
+        project["datasets"] = new_datasets
 
     if "editorState" in payload:
         project["editorState"] = payload["editorState"] or {"components": []}
@@ -110,11 +126,16 @@ def list_projects(user_id: str) -> list[dict]:
         with path.open("r", encoding="utf-8") as f:
             project = json.load(f)
 
+        datasets = project.get("datasets") or []
+        dataset_names = ", ".join(
+            ds.get("name") for ds in datasets if ds.get("name")
+        ) or None
+
         projects.append({
             "id": project.get("id"),
             "title": project.get("title", "Untitled dashboard"),
             "description": project.get("description", ""),
-            "datasetName": (project.get("dataset") or {}).get("name"),
+            "datasetName": dataset_names,
             "createdAt": project.get("createdAt"),
             "updatedAt": project.get("updatedAt"),
         })

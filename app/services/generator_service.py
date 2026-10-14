@@ -1,7 +1,6 @@
 from app.services.renderers.native_export_render import render_native_dashboard_code
 from app.services.renderers.schema_utils import (
     get_dashboard_title,
-    get_dataset_name,
     python_string_literal,
 )
 
@@ -31,24 +30,33 @@ def generate_dashboard_header(schema: dict) -> list[str]:
 
 
 def generate_dataframe_setup(schema: dict) -> list[str]:
-    dataset_name = python_string_literal(get_dataset_name(schema), "data.csv")
+    data_sources = [
+        {
+            "datasetId": ds.get("datasetId") or "default",
+            "name": ds.get("name") or "data.csv",
+        }
+        for ds in schema.get("dataSources", [])
+    ]
 
     return [
-        f"DATA_PATH = Path(__file__).parent / 'data' / {dataset_name}",
-        "",
-        "if not DATA_PATH.exists():",
-        "    st.error(f'CSV файл не найден: {DATA_PATH}')",
-        "    st.stop()",
+        "DATA_DIR = Path(__file__).parent / 'data'",
+        f"DATA_SOURCES = {data_sources!r}",
         "",
         "@st.cache_data(show_spinner=False)",
         "def load_dataset(path):",
         "    return pd.read_csv(path, low_memory=False)",
         "",
-        "try:",
-        "    df = load_dataset(str(DATA_PATH))",
-        "except Exception as e:",
-        "    st.error(f'Ошибка чтения CSV: {e}')",
-        "    st.stop()",
+        "datasets = {}",
+        "for source in DATA_SOURCES:",
+        "    data_path = DATA_DIR / source['name']",
+        "    if not data_path.exists():",
+        "        st.error(f'CSV файл не найден: {data_path}')",
+        "        st.stop()",
+        "    try:",
+        "        datasets[source['datasetId']] = load_dataset(str(data_path))",
+        "    except Exception as e:",
+        "        st.error(f'Ошибка чтения CSV ({source[\"name\"]}): {e}')",
+        "        st.stop()",
         "",
     ]
 
