@@ -39,16 +39,19 @@ def make_schema() -> dict:
             "title": "Sales dashboard",
             "grid": {"columns": 12},
         },
-        "dataSource": {
-            "type": "backend_dataset",
-            "datasetId": "dataset-1",
-            "name": "sales.csv",
-            "fields": ["date", "region", "sales"],
-        },
+        "dataSources": [
+            {
+                "type": "backend_dataset",
+                "datasetId": "dataset-1",
+                "name": "sales.csv",
+                "fields": ["date", "region", "sales"],
+            }
+        ],
         "filters": [
             {
                 "id": "filter-1",
                 "type": "selectbox",
+                "datasetId": "dataset-1",
                 "order": 1,
                 "layout": {"width": 4, "height": 160},
                 "title": "Region",
@@ -60,6 +63,7 @@ def make_schema() -> dict:
             {
                 "id": "chart-1",
                 "type": "area_chart",
+                "datasetId": "dataset-1",
                 "order": 2,
                 "layout": {"width": 8, "height": 360},
                 "title": "Sales trend",
@@ -73,6 +77,7 @@ def make_schema() -> dict:
             {
                 "id": "metric-1",
                 "type": "metric",
+                "datasetId": "dataset-1",
                 "order": 3,
                 "layout": {"width": 4, "height": 200},
                 "title": "Total",
@@ -92,7 +97,8 @@ class DashboardSchemaTests(unittest.TestCase):
         self.assertEqual(schema["views"][0]["layout"]["width"], 8)
         self.assertEqual(schema["views"][0]["layout"]["height"], 360)
         self.assertEqual(schema["views"][0]["color"], "#818cf8")
-        self.assertEqual(schema["dataSource"]["datasetId"], "dataset-1")
+        self.assertEqual(schema["dataSources"][0]["datasetId"], "dataset-1")
+        self.assertEqual(schema["views"][0]["datasetId"], "dataset-1")
 
     def test_rejects_invalid_width(self):
         schema = make_schema()

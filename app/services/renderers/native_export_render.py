@@ -157,16 +157,28 @@ def selected_filter_value(component, dataframe):
     return selected if selected in options else ALL_VALUES_LABEL
 
 
-def apply_filters(schema, dataframe):
-    filtered = dataframe
+def resolve_dataset_id(component, datasets):
+    dataset_id = component.get("datasetId")
+    if dataset_id and dataset_id in datasets:
+        return dataset_id
+    return next(iter(datasets), None)
+
+
+def apply_filters(schema, datasets):
+    filtered_datasets = dict(datasets)
     for component in sorted(schema.get("filters", []), key=lambda item: item.get("order", 0)):
-        field = component.get("field")
-        if field not in dataframe.columns:
+        dataset_id = resolve_dataset_id(component, datasets)
+        if not dataset_id or dataset_id not in filtered_datasets:
             continue
-        selected = selected_filter_value(component, dataframe)
+        source_df = datasets[dataset_id]
+        filtered_df = filtered_datasets[dataset_id]
+        field = component.get("field")
+        if field not in source_df.columns:
+            continue
+        selected = selected_filter_value(component, source_df)
         if selected != ALL_VALUES_LABEL:
-            filtered = filtered[filtered[field].astype(str) == selected]
-    return filtered
+            filtered_datasets[dataset_id] = filtered_df[filtered_df[field].astype(str) == selected]
+    return filtered_datasets
 
 
 def grid_height(component):
@@ -602,18 +614,20 @@ def render_component(
             render_chart(component, filtered_dataframe, content_height)
 
 
-def render_dashboard(schema, dataframe):
+def render_dashboard(schema, datasets):
     placements = pack_components(components_from_schema(schema))
-    if not placements:
+    if not placements or not datasets:
         return
     st.markdown(dashboard_grid_style(placements), unsafe_allow_html=True)
-    filtered = apply_filters(schema, dataframe)
+    filtered_datasets = apply_filters(schema, datasets)
     with st.container(key="dashboard_grid"):
         for item in sorted(placements, key=lambda value: (value["y"], value["x"])):
+            component = item["component"]
+            dataset_id = resolve_dataset_id(component, datasets)
             render_component(
-                item["component"],
-                dataframe,
-                filtered,
+                component,
+                datasets[dataset_id],
+                filtered_datasets[dataset_id],
                 grid_pixel_height(item["h"]),
             )
 '''
@@ -626,6 +640,6 @@ def render_native_dashboard_code(schema: dict) -> list[str]:
         "",
         *NATIVE_EXPORT_RENDERER_SOURCE.strip().splitlines(),
         "",
-        "render_dashboard(DASHBOARD_SCHEMA, df)",
+        "render_dashboard(DASHBOARD_SCHEMA, datasets)",
         "",
     ]
