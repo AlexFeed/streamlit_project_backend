@@ -129,11 +129,11 @@ Dashboard Schema v2 (JSON)
         ↓
 Pydantic Validation (app/schemas/dashboard.py)
         ↓
-Backend Renderers (app/services/renderers/)
+Backend Renderers (app/services/renderers/) & Utils (app/utils/)
         ↓
- ├── native_export_render.py   → автономный app.py (CSS Grid 12 col + Streamlit / Vega-Lite)
- ├── elements_export_render.py → рендеринг для streamlit-elements
- └── preview_runtime_render.py → live runtime preview
+ ├── render_core.py    → единое ядро отрисовки (CSS Grid 12 col + Vega-Lite)
+ ├── export_render.py  → сборка автономного app.py для ZIP-архива
+ └── preview_render.py → live runtime preview на порту 8501
 ~~~
 
 Клиент никогда не передаёт исполняемый Python-код — только декларативную JSON-схему **Dashboard Schema v2**, которая проходит строгую валидацию на бэкенде и компилируется в безопасный код Streamlit.
@@ -584,11 +584,11 @@ dashboard_project.zip
 
 # 👀 Preview API
 
-Управляет сессиями интерактивного предпросмотра для встроенного Streamlit runtime (`preview_app.py`):
+Управляет сессиями интерактивного предпросмотра для встроенного Streamlit runtime (`preview_render.py`):
 
 * `POST /preview` — создать preview-сессию (проверяет владение `datasetId`, валидирует `schema`, возвращает `sessionId`, `previewUrl`, `revision`).
 * `PUT /preview/{sessionId}` — обновить схему в существующей сессии и увеличить `revision`.
-* `GET /preview/{sessionId}` — внутренний endpoint для `preview_app.py` (возвращает `schema`, `datasetPath`, `revision`).
+* `GET /preview/{sessionId}` — внутренний endpoint для `preview_render.py` (возвращает `schema`, `datasetPath`, `revision`).
 * `DELETE /preview/{sessionId}` — явно удалить сессию (неактивные сессии также очищаются автоматически по истечении TTL).
 
 ---
@@ -632,6 +632,9 @@ app/
 │   └── generate_routes.py        → POST /generate (сборка ZIP-архива)
 ├── schemas/
 │   └── dashboard.py              → Pydantic v2 модели и валидация Dashboard Schema v2
+├── utils/
+│   ├── data_transform.py         → фильтрация, агрегации, сортировка и расчёт метрик на Pandas
+│   └── schema_utils.py           → упаковка 12-колоночной сетки и нормализация координат
 └── services/
     ├── auth_service.py           → JWT, Argon2 хеширование, storage/users/users.json
     ├── dataset_service.py        → сохранение CSV, определение типов полей и выборка строк
@@ -640,11 +643,9 @@ app/
     ├── preview_runtime_service.py→ фоновый запуск процесса Streamlit
     ├── generator_service.py      → точка входа генератора кода
     └── renderers/
-        ├── data_transform.py         → фильтрация, агрегации, сортировка и расчёт метрик на Pandas
-        ├── schema_utils.py           → упаковка 12-колоночной сетки и нормализация координат
-        ├── native_export_render.py   → генерация автономного app.py (CSS Grid + Vega-Lite)
-        ├── elements_export_render.py → рендеринг на базе streamlit-elements
-        └── preview_runtime_render.py → рендеринг для фонового preview_app.py
+        ├── render_core.py        → единое ядро отрисовки дашборда (CSS Grid 12 col + Vega-Lite)
+        ├── export_render.py      → упаковка кода в автономный app.py для ZIP-архива
+        └── preview_render.py     → Streamlit-приложение фонового runtime preview
 ~~~
 
 ---
@@ -657,7 +658,7 @@ app/
 | `PREVIEW_HOST` | `127.0.0.1` | Хост Streamlit-сервера предпросмотра |
 | `PREVIEW_PUBLIC_URL` | `http://localhost:8501` | Публичный URL для формирования `previewUrl` |
 | `PREVIEW_SESSION_TTL_SECONDS` | `1800` | Время жизни неактивной сессии предпросмотра (30 мин) |
-| `STREAMLIT_BUILDER_API_BASE` | `http://localhost:8000` | Адрес FastAPI для обращения из `preview_app.py` |
+| `STREAMLIT_BUILDER_API_BASE` | `http://localhost:8000` | Адрес FastAPI для обращения из `preview_render.py` |
 
 ---
 

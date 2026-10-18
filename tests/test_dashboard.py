@@ -18,18 +18,18 @@ from app.schemas.dashboard import validate_dashboard_schema
 from app.services.generator_service import generate_streamlit_code
 from app.services import auth_service, dataset_service
 from app.services.preview_service import PreviewService
-from app.services.renderers.data_transform import (
+from app.utils.data_transform import (
     calculate_metric,
     prepare_chart_data,
 )
-from app.services.renderers.schema_utils import (
+from app.utils.schema_utils import (
     balance_components_by_height,
     get_components,
     get_row_column_widths,
     pack_component_rows,
     pack_freeform_grid,
 )
-from app.services.renderers import preview_runtime_render
+from app.services.renderers import render_core
 
 
 def make_schema() -> dict:
@@ -721,29 +721,18 @@ class GeneratorTests(unittest.TestCase):
 
 
 class RuntimeRendererTests(unittest.TestCase):
-    def test_runtime_uses_interactive_elements_grid(self):
+    def test_runtime_renders_native_dashboard(self):
         dataframe = pd.DataFrame({
             "region": ["A", "B"],
             "sales": [10, 20],
         })
-
-        with patch.object(
-            preview_runtime_render,
-            "render_elements_dashboard",
-        ) as grid_output, patch.object(
-            preview_runtime_render.st,
-            "title",
-        ), patch.object(
-            preview_runtime_render.st,
-            "caption",
-        ):
-            preview_runtime_render.render_runtime_dashboard(
-                make_schema(),
-                dataframe,
-            )
-
-        grid_output.assert_called_once()
-        self.assertIs(grid_output.call_args.args[1], dataframe)
+        schema = make_schema()
+        datasets = {"dataset-1": dataframe}
+        with patch.object(render_core.st, "markdown") as markdown_mock, \
+                patch.object(render_core.st, "container") as container_mock:
+            render_core.render_dashboard(schema, datasets)
+        markdown_mock.assert_called()
+        container_mock.assert_called()
 
 
 class PreviewServiceTests(unittest.TestCase):

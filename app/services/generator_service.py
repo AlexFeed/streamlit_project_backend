@@ -1,5 +1,5 @@
-from app.services.renderers.native_export_render import render_native_dashboard_code
-from app.services.renderers.schema_utils import (
+from app.services.renderers.export_render import render_export_dashboard_code
+from app.utils.schema_utils import (
     get_dashboard_title,
     python_string_literal,
 )
@@ -67,6 +67,6 @@ def generate_streamlit_code(schema: dict) -> str:
     code.extend(generate_imports())
     code.extend(generate_dashboard_header(schema))
     code.extend(generate_dataframe_setup(schema))
-    code.extend(render_native_dashboard_code(schema))
+    code.extend(render_export_dashboard_code(schema))
 
     return "\n".join(code)
