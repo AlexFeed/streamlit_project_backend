@@ -1,6 +1,4 @@
 import os
-import sys
-from pathlib import Path
 
 import pandas as pd
 import requests
@@ -45,23 +43,22 @@ if response.status_code != 200:
 
 data = response.json()
 schema = data["schema"]
-dataset_path = Path(data["datasetPath"])
+datasets_paths = data.get("datasetsPaths") or {}
 
 
+# Кэширование загруженных источников данных
 @st.cache_data(show_spinner=False)
 def load_dataset(path: str):
     return pd.read_csv(path, low_memory=False)
 
 
-try:
-    df = load_dataset(str(dataset_path))
-except Exception as error:
-    st.error(f"Ошибка чтения CSV: {error}")
-    st.stop()
-
-data_sources = schema.get("dataSources") or []
-dataset_id = data_sources[0].get("datasetId") if data_sources else "default"
-datasets = {dataset_id: df}
+datasets = {}
+for ds_id, file_path in datasets_paths.items():
+    try:
+        datasets[ds_id] = load_dataset(file_path)
+    except Exception as error:
+        st.error(f"Ошибка чтения CSV ({ds_id}): {error}")
+        st.stop()
 
 dashboard_title = schema.get("dashboard", {}).get("title") or "Streamlit Dashboard"
 st.title(dashboard_title)

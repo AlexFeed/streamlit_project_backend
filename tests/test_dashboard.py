@@ -23,11 +23,8 @@ from app.utils.data_transform import (
     prepare_chart_data,
 )
 from app.utils.schema_utils import (
-    balance_components_by_height,
-    get_components,
-    get_row_column_widths,
-    pack_component_rows,
-    pack_freeform_grid,
+    get_dashboard_title,
+    python_string_literal,
 )
 from app.services.renderers import render_core
 
@@ -167,66 +164,14 @@ class DashboardSchemaTests(unittest.TestCase):
             validate_dashboard_schema(schema)
 
 
-class LayoutTests(unittest.TestCase):
-    def test_packs_components_into_twelve_column_rows(self):
-        components = [
-            {"layout": {"width": 8}},
-            {"layout": {"width": 4}},
-            {"layout": {"width": 6}},
-        ]
+class SchemaUtilsTests(unittest.TestCase):
+    def test_gets_dashboard_title_and_fallback(self):
+        self.assertEqual(get_dashboard_title({"dashboard": {"title": "My Title"}}), "My Title")
+        self.assertEqual(get_dashboard_title({}), "Untitled project")
 
-        rows = pack_component_rows(components)
-
-        self.assertEqual([len(row) for row in rows], [2, 1])
-        self.assertEqual(get_row_column_widths(rows[0]), [8, 4])
-        self.assertEqual(get_row_column_widths(rows[1]), [6, 6])
-
-    def test_keeps_filters_and_views_in_one_ordered_grid(self):
-        components = get_components(make_schema())
-        rows = pack_component_rows(components)
-
-        self.assertEqual(
-            [component["type"] for component in components],
-            ["selectbox", "area_chart", "metric"],
-        )
-        self.assertEqual(get_row_column_widths(rows[0]), [4, 8])
-        self.assertEqual(get_row_column_widths(rows[1]), [4, 8])
-
-    def test_balances_charts_by_individual_height(self):
-        components = [
-            {"id": "chart-1", "layout": {"height": 280}},
-            {"id": "chart-2", "layout": {"height": 220}},
-            {"id": "chart-3", "layout": {"height": 260}},
-            {"id": "chart-4", "layout": {"height": 380}},
-        ]
-
-        lanes = balance_components_by_height(components)
-
-        self.assertEqual(
-            [[component["id"] for component in lane] for lane in lanes],
-            [["chart-1", "chart-4"], ["chart-2", "chart-3"]],
-        )
-
-    def test_freeform_packer_keeps_explicit_canvas_coordinates(self):
-        components = [
-            {
-                "id": "filter",
-                "order": 1,
-                "layout": {"x": 0, "y": 0, "width": 3, "height": 160},
-            },
-            {
-                "id": "chart",
-                "order": 2,
-                "layout": {"x": 3, "y": 4, "width": 9, "height": 360},
-            },
-        ]
-
-        packed = pack_freeform_grid(components)
-
-        self.assertEqual(
-            [(item["x"], item["y"], item["w"]) for item in packed],
-            [(0, 0, 3), (3, 4, 9)],
-        )
+    def test_formats_python_string_literal(self):
+        self.assertEqual(python_string_literal("hello"), "'hello'")
+        self.assertEqual(python_string_literal(None, "fallback"), "'fallback'")
 
 
 class DataTransformTests(unittest.TestCase):
@@ -752,26 +697,52 @@ class PreviewServiceTests(unittest.TestCase):
                 created = service.create_preview(
                     "user-1",
                     make_schema(),
-                    "dataset-1",
                 )
                 updated = service.update_preview(
                     created["sessionId"],
                     "user-1",
                     make_schema(),
-                    "dataset-1",
                 )
 
                 self.assertEqual(created["revision"], 1)
                 self.assertEqual(updated["revision"], 2)
                 self.assertIn("revision=2", updated["previewUrl"])
-                self.assertEqual(
-                    service.get_preview(created["sessionId"])["revision"],
-                    2,
-                )
+                session = service.get_preview(created["sessionId"])
+                self.assertEqual(session["revision"], 2)
+                self.assertIn("dataset-1", session["datasetsPaths"])
                 self.assertEqual(
                     service.delete_preview(created["sessionId"], "user-1"),
                     {"deleted": True},
                 )
+
+    def test_creates_preview_with_multiple_datasets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path_a = Path(directory) / "sales.csv"
+            path_b = Path(directory) / "targets.csv"
+            path_a.write_text("region,sales\nA,10\n", encoding="utf-8")
+            path_b.write_text("region,target\nA,15\n", encoding="utf-8")
+
+            schema = make_schema()
+            schema["dataSources"] = [
+                {"type": "backend_dataset", "datasetId": "ds-a", "name": "sales.csv"},
+                {"type": "backend_dataset", "datasetId": "ds-b", "name": "targets.csv"},
+            ]
+
+            service = PreviewService(ttl_seconds=60)
+
+            def fake_get_path(user_id, ds_id):
+                return path_a if ds_id == "ds-a" else path_b
+
+            with patch(
+                "app.services.preview_service.get_dataset_path",
+                side_effect=fake_get_path,
+            ):
+                created = service.create_preview("user-1", schema)
+                session = service.get_preview(created["sessionId"])
+
+                self.assertEqual(len(session["datasetsPaths"]), 2)
+                self.assertIn("ds-a", session["datasetsPaths"])
+                self.assertIn("ds-b", session["datasetsPaths"])
 
 
 if __name__ == "__main__":
