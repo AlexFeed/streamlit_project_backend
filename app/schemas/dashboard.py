@@ -9,7 +9,7 @@ SortOrder = Literal["none", "asc", "desc"]
 
 class Layout(BaseModel):
     width: int = Field(default=6, ge=1, le=12)
-    height: int = Field(default=320, ge=120, le=720)
+    height: int = Field(default=320, ge=60, le=720)
     x: int | None = Field(default=None, ge=0, le=11)
     y: int | None = Field(default=None, ge=0)
 
@@ -107,8 +107,27 @@ class MetricView(ComponentBase):
     aggregation: Literal["sum", "mean", "count", "min", "max"] = "sum"
 
 
+class TextView(ComponentBase):
+    type: Literal["text"]
+    content: str = Field(min_length=1)
+    font_size: int = Field(default=16, alias="fontSize", ge=12, le=32)
+    font_weight: Literal["normal", "bold"] = Field(
+        default="normal",
+        alias="fontWeight",
+    )
+    font_style: Literal["normal", "italic"] = Field(
+        default="normal",
+        alias="fontStyle",
+    )
+    color: str = Field(default="#d4d4d8", pattern=r"^#[0-9a-fA-F]{6}$")
+    text_align: Literal["left", "center", "right"] = Field(
+        default="left",
+        alias="textAlign",
+    )
+
+
 DashboardView = Annotated[
-    Union[ChartView, MetricView],
+    Union[ChartView, MetricView, TextView],
     Field(discriminator="type"),
 ]
 
@@ -129,6 +148,18 @@ class DashboardSchema(BaseModel):
         if len(ids) != len(set(ids)):
             raise ValueError("Component ids must be unique")
         return components
+
+    @model_validator(mode="after")
+    def charts_and_filters_must_keep_readable_height(self):
+        for component in [*self.filters, *self.views]:
+            if (
+                component.type not in {"text", "metric"}
+                and component.layout.height < 120
+            ):
+                raise ValueError(
+                    "Chart and filter height must be at least 120 pixels"
+                )
+        return self
 
 
 def validate_dashboard_schema(schema: dict) -> dict:

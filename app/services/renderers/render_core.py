@@ -1,3 +1,5 @@
+import html
+
 import pandas as pd
 import streamlit as st
 
@@ -184,8 +186,10 @@ def apply_filters(schema, datasets):
 
 def grid_height(component):
     requested = int(component.get("layout", {}).get("height", 320))
+    component_type = component.get("type")
+    chrome_height = 0 if component_type in {"text", "metric"} else CARD_CHROME_HEIGHT
     pitch = GRID_ROW_HEIGHT + GRID_GAP
-    total_height = requested + CARD_CHROME_HEIGHT
+    total_height = requested + chrome_height
     return max(1, (total_height + GRID_GAP + pitch - 1) // pitch)
 
 
@@ -220,9 +224,11 @@ def pack_components(components):
     for component in explicit:
         layout = component.get("layout", {})
         width = max(1, min(GRID_COLUMNS, int(layout.get("width", 6))))
+        source_x = max(0, min(GRID_COLUMNS - width, int(layout.get("x", 0))))
+        source_y = max(0, int(layout.get("y", 0)))
         placed.append({
-            "x": max(0, min(GRID_COLUMNS - width, int(layout.get("x", 0)))),
-            "y": max(0, int(layout.get("y", 0))),
+            "x": source_x,
+            "y": source_y,
             "w": width,
             "h": grid_height(component),
             "component": component,
@@ -277,7 +283,7 @@ def dashboard_grid_style(placements):
     ]
     for item in placements:
         key_class = f"st-key-{card_container_key(item['component'])}"
-        rules.extend([
+        item_rules = [
             (
                 ".st-key-dashboard_grid > [data-testid=\"stLayoutWrapper\"]"
                 f":has(.{key_class}) {{"
@@ -286,8 +292,9 @@ def dashboard_grid_style(placements):
             f"  grid-row: {item['y'] + 1} / span {item['h']};",
             "  min-width: 0;",
             "  height: 100%;",
-            "}",
-        ])
+        ]
+        item_rules.append("}")
+        rules.extend(item_rules)
     rules.extend([
         "@media (max-width: 760px) {",
         "  .st-key-dashboard_grid {",
@@ -298,6 +305,7 @@ def dashboard_grid_style(placements):
         "  .st-key-dashboard_grid > [data-testid=\"stLayoutWrapper\"] {",
         "    width: 100%;",
         "    height: auto;",
+        "    transform: none !important;",
         "  }",
         "}",
         "</style>",
@@ -429,13 +437,51 @@ def render_metric(component, dataframe):
     except (KeyError, ValueError) as error:
         st.warning(str(error))
         return
-    st.metric(
-        component.get("title") or "Метрика",
-        format_metric(value),
-        help=component.get("description") or None,
-        )
-    if component.get("description"):
-        st.caption(component["description"])
+    title = html.escape(component.get("title") or "Метрика")
+    formatted_value = html.escape(str(format_metric(value)))
+    description = component.get("description") or (
+        f"{component.get('aggregation', 'sum')} · {component.get('field', '')}"
+    )
+    safe_description = html.escape(description)
+    card_height = max(60, int(component.get("layout", {}).get("height", 80)))
+    content_height = max(28, card_height - 48)
+    st.markdown(
+        (
+            '<div style="display:flex; flex-direction:column; height:100%;">'
+            f'<div style="font-size:14px; font-weight:650; color:#f8fafc;">{title}</div>'
+            f'<div style="min-height:{content_height}px; display:flex; flex:1; '
+            'flex-direction:column; align-items:center; justify-content:center; '
+            'text-align:center;">'
+            f'<div style="font-size:36px; font-weight:700; line-height:1; color:#f8fafc;">'
+            f'{formatted_value}</div>'
+            f'<div style="margin-top:12px; font-size:14px; color:#a1a1aa;">'
+            f'{safe_description}</div>'
+            '</div></div>'
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def render_text(component):
+    title = component.get("title")
+    content = component.get("content") or ""
+    if title:
+        st.markdown(f"**{title}**")
+    safe_content = html.escape(content).replace("\n", "<br>")
+    style = "; ".join([
+        f"font-size: {component.get('fontSize', 16)}px",
+        f"font-weight: {component.get('fontWeight', 'normal')}",
+        f"font-style: {component.get('fontStyle', 'normal')}",
+        f"color: {component.get('color', '#d4d4d8')}",
+        f"text-align: {component.get('textAlign', 'left')}",
+        "line-height: 1.5",
+        "white-space: pre-wrap",
+        "overflow-wrap: anywhere",
+    ])
+    st.markdown(
+        f'<div style="{style}">{safe_content}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def render_chart(view, dataframe, available_height):
@@ -602,7 +648,12 @@ def render_component(
         container_height=None,
 ):
     component_type = component.get("type")
-    content_height = max(140, int(component.get("layout", {}).get("height", 320)))
+    requested_height = int(component.get("layout", {}).get("height", 320))
+    if component_type in {"text", "metric"}:
+        content_height = max(60, requested_height)
+    else:
+        outer_height = container_height or requested_height + CARD_CHROME_HEIGHT
+        content_height = max(140, outer_height - CARD_CHROME_HEIGHT)
     with st.container(
             height=container_height or content_height,
             border=True,
@@ -612,6 +663,8 @@ def render_component(
             render_filter(component, source_dataframe)
         elif component_type == "metric":
             render_metric(component, filtered_dataframe)
+        elif component_type == "text":
+            render_text(component)
         else:
             st.markdown(f"**{component.get('title') or 'График'}**")
             render_chart(component, filtered_dataframe, content_height)

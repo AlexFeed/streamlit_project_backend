@@ -335,6 +335,41 @@ class GeneratorTests(unittest.TestCase):
                 self.assertIn(f"'type': '{chart_type}'", code)
                 self.assertIn("render_chart", code)
 
+    def test_generates_text_component(self):
+        schema = make_schema()
+        schema["views"].append({
+            "id": "text-1",
+            "type": "text",
+            "datasetId": None,
+            "order": 3,
+            "layout": {"width": 6, "height": 60},
+            "title": "",
+            "content": "Данные обновляются раз в неделю.",
+            "fontSize": 20,
+            "fontWeight": "bold",
+            "fontStyle": "italic",
+            "color": "#38bdf8",
+            "textAlign": "center",
+        })
+
+        validated_schema = validate_dashboard_schema(schema)
+        code = generate_streamlit_code(validated_schema)
+
+        compile(code, "generated_app.py", "exec")
+        self.assertEqual(validated_schema["views"][2]["type"], "text")
+        self.assertEqual(validated_schema["views"][2]["title"], "")
+        self.assertEqual(validated_schema["views"][2]["layout"]["height"], 60)
+        self.assertEqual(validated_schema["views"][2]["fontSize"], 20)
+        self.assertIn("Данные обновляются раз в неделю.", code)
+        self.assertIn("render_text", code)
+
+    def test_rejects_too_small_chart_height(self):
+        schema = make_schema()
+        schema["views"][0]["layout"]["height"] = 60
+
+        with self.assertRaises(ValidationError):
+            validate_dashboard_schema(schema)
+
     def test_generates_component_gradient_chart(self):
         schema = make_schema()
         schema["views"][0].update({
@@ -499,7 +534,7 @@ class GeneratorTests(unittest.TestCase):
         self.assertIn("placements = pack_components(components_from_schema(schema))", code)
         self.assertIn("dashboard_grid_style(placements)", code)
         self.assertIn('with st.container(key="dashboard_grid"):', code)
-        self.assertIn("grid_pixel_height(item[\"h\"])", code)
+        self.assertIn('grid_pixel_height(item["h"])', code)
         self.assertIn("render_component(", code)
         self.assertIn('[*schema.get("filters", []), *schema.get("views", [])]', code)
 
@@ -666,6 +701,66 @@ class GeneratorTests(unittest.TestCase):
 
 
 class RuntimeRendererTests(unittest.TestCase):
+    def test_metric_renderer_centers_value_in_compact_card(self):
+        component = {
+            "title": "Продажи",
+            "field": "sales",
+            "aggregation": "sum",
+            "layout": {"height": 80},
+        }
+        dataframe = pd.DataFrame({"sales": [10, 20]})
+
+        with patch.object(render_core.st, "markdown") as markdown_mock:
+            render_core.render_metric(component, dataframe)
+
+        rendered_html = markdown_mock.call_args.args[0]
+        self.assertIn("justify-content:center", rendered_html)
+        self.assertIn("min-height:32px", rendered_html)
+        self.assertIn(">30<", rendered_html)
+
+    def test_compact_components_use_shorter_grid_rows(self):
+        metric = {"type": "metric", "layout": {"height": 140}}
+        text = {"type": "text", "layout": {"height": 60}}
+
+        self.assertEqual(render_core.grid_height(metric), 5)
+        self.assertEqual(render_core.grid_height(text), 3)
+
+    def test_renderer_keeps_editor_grid_coordinates(self):
+        components = [
+            {"type": "metric", "order": 1, "layout": {"x": 0, "y": 0, "width": 3, "height": 140}},
+            {"type": "bar_chart", "order": 2, "layout": {"x": 0, "y": 7, "width": 3, "height": 248}},
+            {"type": "line_chart", "order": 3, "layout": {"x": 3, "y": 0, "width": 6, "height": 320}},
+            {"type": "text", "order": 4, "layout": {"x": 3, "y": 12, "width": 6, "height": 60}},
+        ]
+
+        metric, bar, line, text = render_core.pack_components(components)
+
+        self.assertEqual((metric["y"], metric["h"]), (0, 5))
+        self.assertEqual((bar["y"], bar["h"]), (7, 10))
+        self.assertEqual((line["y"], line["h"]), (0, 12))
+        self.assertEqual((text["y"], text["h"]), (12, 3))
+
+    def test_text_renderer_applies_style_and_escapes_html(self):
+        component = {
+            "title": "Комментарий",
+            "content": "<script>alert('x')</script>\nВторая строка",
+            "fontSize": 20,
+            "fontWeight": "bold",
+            "fontStyle": "italic",
+            "color": "#38bdf8",
+            "textAlign": "center",
+        }
+
+        with patch.object(render_core.st, "markdown") as markdown_mock:
+            render_core.render_text(component)
+
+        rendered_html = markdown_mock.call_args_list[1].args[0]
+        self.assertIn("font-size: 20px", rendered_html)
+        self.assertIn("font-weight: bold", rendered_html)
+        self.assertIn("text-align: center", rendered_html)
+        self.assertIn("&lt;script&gt;", rendered_html)
+        self.assertNotIn("<script>", rendered_html)
+
     def test_runtime_renders_native_dashboard(self):
         dataframe = pd.DataFrame({
             "region": ["A", "B"],
