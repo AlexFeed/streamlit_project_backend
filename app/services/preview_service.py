@@ -26,9 +26,9 @@ class PreviewService:
             or os.getenv("PREVIEW_PUBLIC_URL", "http://localhost:8501")
         ).rstrip("/")
 
-    def create_preview(self, user_id: str, schema: dict, dataset_id: str) -> dict:
+    def create_preview(self, user_id: str, schema: dict) -> dict:
         validated_schema = validate_dashboard_schema(schema)
-        dataset_path = self._get_dataset_path_or_raise(user_id, dataset_id)
+        datasets_paths = self._resolve_datasets_paths(user_id, validated_schema)
         session_id = str(uuid.uuid4())
         now = datetime.now(UTC).isoformat()
 
@@ -37,8 +37,7 @@ class PreviewService:
             self._sessions[session_id] = {
                 "userId": user_id,
                 "schema": validated_schema,
-                "datasetId": dataset_id,
-                "datasetPath": str(dataset_path.resolve()),
+                "datasetsPaths": datasets_paths,
                 "createdAt": now,
                 "updatedAt": now,
                 "revision": 1,
@@ -52,23 +51,17 @@ class PreviewService:
         session_id: str,
         user_id: str,
         schema: dict,
-        dataset_id: str | None = None,
     ) -> dict:
         validated_schema = validate_dashboard_schema(schema)
 
         with self._lock:
             self._cleanup_expired()
             session = self._get_owned_session(session_id, user_id)
-            next_dataset_id = dataset_id or session["datasetId"]
-            dataset_path = self._get_dataset_path_or_raise(
-                user_id,
-                next_dataset_id,
-            )
+            datasets_paths = self._resolve_datasets_paths(user_id, validated_schema)
 
             session.update({
                 "schema": validated_schema,
-                "datasetId": next_dataset_id,
-                "datasetPath": str(dataset_path.resolve()),
+                "datasetsPaths": datasets_paths,
                 "updatedAt": datetime.now(UTC).isoformat(),
                 "revision": session["revision"] + 1,
                 "expiresAtMonotonic": time.monotonic() + self._ttl_seconds,
@@ -88,7 +81,7 @@ class PreviewService:
 
             return {
                 "schema": session["schema"],
-                "datasetPath": session["datasetPath"],
+                "datasetsPaths": session["datasetsPaths"],
                 "revision": session["revision"],
                 "updatedAt": session["updatedAt"],
             }
@@ -111,15 +104,34 @@ class PreviewService:
 
         return session
 
-    def _get_dataset_path_or_raise(self, user_id: str, dataset_id: str):
+    def _get_dataset_path_or_raise(self, user_id: str, dataset_id: str) -> Path:
         if not dataset_id:
             raise ValueError("datasetId is required")
 
         dataset_path = get_dataset_path(user_id, dataset_id)
         if not dataset_path:
-            raise ValueError("Dataset not found")
+            raise ValueError(f"Dataset '{dataset_id}' not found")
 
         return dataset_path
+
+    def _resolve_datasets_paths(
+        self,
+        user_id: str,
+        validated_schema: dict,
+    ) -> dict[str, str]:
+        data_sources = validated_schema.get("dataSources") or []
+        if not data_sources:
+            raise ValueError("dataSources are required")
+
+        datasets_paths: dict[str, str] = {}
+        for ds in data_sources:
+            ds_id = ds.get("datasetId")
+            if not ds_id:
+                raise ValueError("datasetId is required for each dataSource")
+            path = self._get_dataset_path_or_raise(user_id, ds_id)
+            datasets_paths[ds_id] = str(path.resolve())
+
+        return datasets_paths
 
     def _cleanup_expired(self) -> None:
         now = time.monotonic()

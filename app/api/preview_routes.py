@@ -23,7 +23,6 @@ def create_preview(
         return preview_service.create_preview(
             user_id=current_user.id,
             schema=payload.get("schema"),
-            dataset_id=payload.get("datasetId"),
         )
     except ValidationError as error:
         raise HTTPException(status_code=422, detail=str(error))
@@ -45,7 +44,6 @@ def update_preview(
             session_id=session_id,
             user_id=current_user.id,
             schema=payload.get("schema"),
-            dataset_id=payload.get("datasetId"),
         )
     except ValidationError as error:
         raise HTTPException(status_code=422, detail=str(error))
