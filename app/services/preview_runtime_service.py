@@ -3,14 +3,20 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Отвечает за запуск streamlit приложения на сервере
+
 class PreviewRuntimeService:
     def __init__(self):
         self.process = None
         self.project_root = Path(__file__).resolve().parents[2]
         self.port = int(os.getenv("PREVIEW_PORT", "8501"))
         self.host = os.getenv("PREVIEW_HOST", "127.0.0.1")
-        self.preview_app_path = self.project_root / "preview_app.py"
+        self.preview_app_path = (
+                self.project_root
+                / "app"
+                / "services"
+                / "renderers"
+                / "preview_render.py"
+        )
 
     def is_running(self) -> bool:
         return self.process is not None and self.process.poll() is None
@@ -20,7 +26,7 @@ class PreviewRuntimeService:
             return
 
         if not self.preview_app_path.exists():
-            raise FileNotFoundError("preview_app.py not found")
+            raise FileNotFoundError(f"{self.preview_app_path} not found")
 
         environment = os.environ.copy()
         environment.setdefault(
@@ -41,6 +47,10 @@ class PreviewRuntimeService:
                 self.host,
                 "--server.headless",
                 "true",
+                "--server.enableCORS",
+                "false",
+                "--server.enableXsrfProtection",
+                "false",
                 "--server.fileWatcherType",
                 "none",
                 "--browser.gatherUsageStats",

@@ -1,3 +1,6 @@
+import pandas as pd
+import streamlit as st
+
 NATIVE_PAGE_STYLE = """
 <style>
   .stApp {
@@ -68,8 +71,6 @@ NATIVE_PAGE_STYLE = """
 </style>
 """
 
-
-NATIVE_EXPORT_RENDERER_SOURCE = r'''
 GRID_COLUMNS = 12
 GRID_ROW_HEIGHT = 20
 GRID_GAP = 16
@@ -200,10 +201,10 @@ def pack_components(components):
 
     def overlaps(candidate, current):
         return (
-            candidate["x"] < current["x"] + current["w"]
-            and candidate["x"] + candidate["w"] > current["x"]
-            and candidate["y"] < current["y"] + current["h"]
-            and candidate["y"] + candidate["h"] > current["y"]
+                candidate["x"] < current["x"] + current["w"]
+                and candidate["x"] + candidate["w"] > current["x"]
+                and candidate["y"] < current["y"] + current["h"]
+                and candidate["y"] + candidate["h"] > current["y"]
         )
 
     ordered = sorted(components, key=lambda item: item.get("order", 0))
@@ -249,8 +250,8 @@ def pack_components(components):
 
 def grid_pixel_height(grid_rows):
     return (
-        max(1, int(grid_rows)) * GRID_ROW_HEIGHT
-        + max(0, int(grid_rows) - 1) * GRID_GAP
+            max(1, int(grid_rows)) * GRID_ROW_HEIGHT
+            + max(0, int(grid_rows) - 1) * GRID_GAP
     )
 
 
@@ -415,7 +416,7 @@ def render_filter(component, dataframe):
         options,
         key=state_key,
         help=f"Поле данных: {field}",
-    )
+        )
 
 
 def render_metric(component, dataframe):
@@ -432,7 +433,7 @@ def render_metric(component, dataframe):
         component.get("title") or "Метрика",
         format_metric(value),
         help=component.get("description") or None,
-    )
+        )
     if component.get("description"):
         st.caption(component["description"])
 
@@ -497,6 +498,8 @@ def render_chart(view, dataframe, available_height):
         mark = {"type": "bar", "cornerRadiusTopLeft": 5, "cornerRadiusTopRight": 5}
     elif chart_type == "area_chart":
         mark = {"type": "area", "line": True, "opacity": .3}
+    elif chart_type == "scatter_plot":
+        mark = {"type": "point", "filled": True}
     else:
         mark = {"type": "line", "point": len(plot_df) <= 80, "strokeWidth": 2.5}
 
@@ -561,7 +564,7 @@ def render_chart(view, dataframe, available_height):
         }
         spec["layer"] = [
             {
-                "mark": {"type": "point", "filled": True},
+                "mark": mark,
                 "encoding": {
                     **encoding,
                     "size": {
@@ -593,17 +596,17 @@ def render_chart(view, dataframe, available_height):
 
 
 def render_component(
-    component,
-    source_dataframe,
-    filtered_dataframe,
-    container_height=None,
+        component,
+        source_dataframe,
+        filtered_dataframe,
+        container_height=None,
 ):
     component_type = component.get("type")
     content_height = max(140, int(component.get("layout", {}).get("height", 320)))
     with st.container(
-        height=container_height or content_height,
-        border=True,
-        key=card_container_key(component),
+            height=container_height or content_height,
+            border=True,
+            key=card_container_key(component),
     ):
         if component_type == "selectbox":
             render_filter(component, source_dataframe)
@@ -614,10 +617,12 @@ def render_component(
             render_chart(component, filtered_dataframe, content_height)
 
 
+# Точка входа которая генерирует весь streamlit код
 def render_dashboard(schema, datasets):
     placements = pack_components(components_from_schema(schema))
     if not placements or not datasets:
         return
+    st.markdown(NATIVE_PAGE_STYLE, unsafe_allow_html=True)
     st.markdown(dashboard_grid_style(placements), unsafe_allow_html=True)
     filtered_datasets = apply_filters(schema, datasets)
     with st.container(key="dashboard_grid"):
@@ -630,16 +635,3 @@ def render_dashboard(schema, datasets):
                 filtered_datasets[dataset_id],
                 grid_pixel_height(item["h"]),
             )
-'''
-
-
-def render_native_dashboard_code(schema: dict) -> list[str]:
-    return [
-        f"st.markdown({NATIVE_PAGE_STYLE!r}, unsafe_allow_html=True)",
-        f"DASHBOARD_SCHEMA = {schema!r}",
-        "",
-        *NATIVE_EXPORT_RENDERER_SOURCE.strip().splitlines(),
-        "",
-        "render_dashboard(DASHBOARD_SCHEMA, datasets)",
-        "",
-    ]
