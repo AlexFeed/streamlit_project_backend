@@ -119,6 +119,14 @@ class DashboardSchemaTests(unittest.TestCase):
             {"width": 5, "height": 360, "x": 5, "y": 7},
         )
 
+    def test_accepts_compact_filter_height(self):
+        schema = make_schema()
+        schema["filters"][0]["layout"]["height"] = 60
+
+        validated = validate_dashboard_schema(schema)
+
+        self.assertEqual(validated["filters"][0]["layout"]["height"], 60)
+
     def test_rejects_duplicate_component_ids(self):
         schema = make_schema()
         schema["views"][0]["id"] = "filter-1"
@@ -717,13 +725,16 @@ class RuntimeRendererTests(unittest.TestCase):
         self.assertIn("justify-content:center", rendered_html)
         self.assertIn("min-height:32px", rendered_html)
         self.assertIn(">30<", rendered_html)
+        self.assertNotIn("sum · sales", rendered_html)
 
     def test_compact_components_use_shorter_grid_rows(self):
         metric = {"type": "metric", "layout": {"height": 140}}
         text = {"type": "text", "layout": {"height": 60}}
+        selectbox = {"type": "selectbox", "layout": {"height": 80}}
 
         self.assertEqual(render_core.grid_height(metric), 5)
         self.assertEqual(render_core.grid_height(text), 3)
+        self.assertEqual(render_core.grid_height(selectbox), 3)
 
     def test_renderer_keeps_editor_grid_coordinates(self):
         components = [

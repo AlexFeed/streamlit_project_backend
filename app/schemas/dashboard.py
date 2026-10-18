@@ -150,14 +150,14 @@ class DashboardSchema(BaseModel):
         return components
 
     @model_validator(mode="after")
-    def charts_and_filters_must_keep_readable_height(self):
+    def charts_must_keep_readable_height(self):
         for component in [*self.filters, *self.views]:
             if (
-                component.type not in {"text", "metric"}
+                component.type not in {"text", "metric", "selectbox"}
                 and component.layout.height < 120
             ):
                 raise ValueError(
-                    "Chart and filter height must be at least 120 pixels"
+                    "Chart height must be at least 120 pixels"
                 )
         return self
 

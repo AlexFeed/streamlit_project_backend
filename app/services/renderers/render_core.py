@@ -187,7 +187,11 @@ def apply_filters(schema, datasets):
 def grid_height(component):
     requested = int(component.get("layout", {}).get("height", 320))
     component_type = component.get("type")
-    chrome_height = 0 if component_type in {"text", "metric"} else CARD_CHROME_HEIGHT
+    chrome_height = (
+        0
+        if component_type in {"text", "metric", "selectbox"}
+        else CARD_CHROME_HEIGHT
+    )
     pitch = GRID_ROW_HEIGHT + GRID_GAP
     total_height = requested + chrome_height
     return max(1, (total_height + GRID_GAP + pitch - 1) // pitch)
@@ -439,10 +443,13 @@ def render_metric(component, dataframe):
         return
     title = html.escape(component.get("title") or "Метрика")
     formatted_value = html.escape(str(format_metric(value)))
-    description = component.get("description") or (
-        f"{component.get('aggregation', 'sum')} · {component.get('field', '')}"
+    description = component.get("description") or ""
+    description_html = (
+        '<div style="margin-top:12px; font-size:14px; color:#a1a1aa;">'
+        f'{html.escape(description)}</div>'
+        if description
+        else ""
     )
-    safe_description = html.escape(description)
     card_height = max(60, int(component.get("layout", {}).get("height", 80)))
     content_height = max(28, card_height - 48)
     st.markdown(
@@ -454,8 +461,7 @@ def render_metric(component, dataframe):
             'text-align:center;">'
             f'<div style="font-size:36px; font-weight:700; line-height:1; color:#f8fafc;">'
             f'{formatted_value}</div>'
-            f'<div style="margin-top:12px; font-size:14px; color:#a1a1aa;">'
-            f'{safe_description}</div>'
+            f'{description_html}'
             '</div></div>'
         ),
         unsafe_allow_html=True,
@@ -649,7 +655,7 @@ def render_component(
 ):
     component_type = component.get("type")
     requested_height = int(component.get("layout", {}).get("height", 320))
-    if component_type in {"text", "metric"}:
+    if component_type in {"text", "metric", "selectbox"}:
         content_height = max(60, requested_height)
     else:
         outer_height = container_height or requested_height + CARD_CHROME_HEIGHT
