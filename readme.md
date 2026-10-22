@@ -14,7 +14,7 @@ Backend-сервис на базе **FastAPI** для валидации дек�
 Сервис позволяет:
 
 1. Регистрировать пользователей и авторизовывать их через **JWT (OAuth2 Bearer)** с хешированием паролей **Argon2**.
-2. Загружать пользовательские `.csv` датасеты и автоматически определять структуру и типы колонок (`number`, `datetime`, `string`).
+2. Загружать пользовательские датасеты (`.csv`, `.tsv`, `.xlsx`, `.xls`) с выбором разделителей и листов excel источника, а также автоматическим определением типов колонок (`number`, `datetime`, `string`).
 3. Отдавать быструю выборку строк (`GET /datasets/{id}/preview`) для живой отрисовки графиков на холсте React-конструктора (**Live Canvas**).
 4. Валидировать декларативную схему дашборда (**Dashboard Schema v2**) через **Pydantic v2** (12-колоночная сетка, координаты `x/y`, размеры `width/height`, агрегации, сортировки и цветовые палитры).
 5. Генерировать готовый к запуску автономный Streamlit-проект в виде `.zip` архива (`app.py`, `data/*.csv`, `requirements.txt`, `README.md`, `run_local.bat`, `run_local.sh`).
@@ -203,12 +203,12 @@ storage/users/users.json
 
 ~~~text
 storage/datasets/<userId>/<datasetId>/
-  data.csv
+  <name>.<ext>
   meta.json
 ~~~
 
-* `data.csv` — загруженный CSV-файл
-* `meta.json` — метаданные: `datasetId`, `userId`, оригинальное имя файла (`name`), `storedName`, список колонок (`fields`), размер в байтах (`size`), `createdAt`
+* `<name>.<ext>` — физический файл данных (сохранённый под именем датасета)
+* `meta.json` — паспорт источника данных: `datasetId`, `userId`, имя файла (`name`), формат (`format`), разделитель (`delimiter`), лист книги (`sheetName`), список колонок (`fields`), типы (`fieldTypes`), размер в байтах (`size`), `createdAt`
 
 ### Проекты
 
@@ -361,10 +361,15 @@ Authorization: Bearer <token>
 
 ## 🔹 POST `/datasets/upload`
 
-Загружает `.csv` файл на сервер, проверяет его читаемость и сохраняет метаданные.
+Загружает файл данных (`.csv`, `.tsv`, `.xlsx`, `.xls`) на сервер, проверяет его читаемость и сохраняет паспорт источника данных.
 
 * **Headers:** `Authorization: Bearer <token>`
-* **Content-Type:** `multipart/form-data` (поле формы `dataset: File`)
+* **Content-Type:** `multipart/form-data`
+* **Form-поля:**
+  * `dataset: File` (обязательное) — файл датасета
+  * `name: string` (опциональное) — пользовательское имя датасета
+  * `delimiter: string` (опциональное) — разделитель для CSV/TSV (`,` / `;` / `\t` / `|`)
+  * `sheetName: string` (опциональное) — название листа для Excel-файла
 
 ### Response `200`
 
@@ -373,8 +378,15 @@ Authorization: Bearer <token>
   "datasetId": "9b2e9f3a-2b4e-4c91-9e4f-1f2a3c4d5e6f",
   "userId": "4c01eccb-d8ef-4a2f-b2bf-46c9c5f57378",
   "name": "sales.csv",
-  "storedName": "data.csv",
+  "format": "csv",
+  "delimiter": ",",
+  "sheetName": null,
   "fields": ["date", "region", "sales"],
+  "fieldTypes": {
+    "date": "datetime",
+    "region": "string",
+    "sales": "number"
+  },
   "size": 10240,
   "createdAt": "2026-10-10T12:00:00"
 }
@@ -409,6 +421,11 @@ Authorization: Bearer <token>
     "region": "string",
     "sales": "number"
   },
+  "fieldTypes": {
+    "date": "datetime",
+    "region": "string",
+    "sales": "number"
+  },
   "rows": [
     { "date": "2026-01-01", "region": "North", "sales": 120.5 }
   ],
@@ -424,6 +441,22 @@ Authorization: Bearer <token>
 Удаляет папку датасета (`data.csv` и `meta.json`) текущего пользователя.
 
 * **Response `200`:** `{"deleted": true}`
+
+---
+
+## 🔹 POST `/datasets/inspect-sheets`
+
+Считывает и возвращает список названий листов из загруженной книги Excel (`.xlsx`, `.xls`) без сохранения файла на диск.
+
+* **Headers:** `Authorization: Bearer <token>`
+* **Content-Type:** `multipart/form-data` (поле формы `file: File`)
+* **Response `200`:**
+~~~json
+{
+  "sheets": ["Лист1", "Лист2"]
+}
+~~~
+* **Response `400`:** `{"detail": "Файл не является книгой Excel (.xlsx, .xls)"}`
 
 ---
 

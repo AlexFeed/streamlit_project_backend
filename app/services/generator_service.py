@@ -34,6 +34,9 @@ def generate_dataframe_setup(schema: dict) -> list[str]:
         {
             "datasetId": ds.get("datasetId") or "default",
             "name": ds.get("name") or "data.csv",
+            "format": ds.get("format") or "csv",
+            "delimiter": ds.get("delimiter"),
+            "sheetName": ds.get("sheetName"),
         }
         for ds in schema.get("dataSources", [])
     ]
@@ -43,19 +46,23 @@ def generate_dataframe_setup(schema: dict) -> list[str]:
         f"DATA_SOURCES = {data_sources!r}",
         "",
         "@st.cache_data(show_spinner=False)",
-        "def load_dataset(path):",
-        "    return pd.read_csv(path, low_memory=False)",
+        "def load_dataset(path, file_format='csv', delimiter=None, sheet_name=None):",
+        "    lower_path = str(path).lower()",
+        "    if file_format == 'excel' or lower_path.endswith(('.xlsx', '.xls')):",
+        "        return pd.read_excel(path, sheet_name=sheet_name or 0)",
+        "    sep = delimiter if delimiter else ('\\t' if lower_path.endswith('.tsv') else ',')",
+        "    return pd.read_csv(path, sep=sep, low_memory=False)",
         "",
         "datasets = {}",
         "for source in DATA_SOURCES:",
         "    data_path = DATA_DIR / source['name']",
         "    if not data_path.exists():",
-        "        st.error(f'CSV файл не найден: {data_path}')",
+        "        st.error(f'Файл данных не найден: {data_path}')",
         "        st.stop()",
         "    try:",
-        "        datasets[source['datasetId']] = load_dataset(str(data_path))",
+        "        datasets[source['datasetId']] = load_dataset(str(data_path), file_format=source.get('format'), delimiter=source.get('delimiter'), sheet_name=source.get('sheetName'))",
         "    except Exception as e:",
-        "        st.error(f'Ошибка чтения CSV ({source[\"name\"]}): {e}')",
+        "        st.error(f'Ошибка чтения файла ({source[\"name\"]}): {e}')",
         "        st.stop()",
         "",
     ]

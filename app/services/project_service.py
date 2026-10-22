@@ -72,22 +72,7 @@ def update_project(user_id: str, project_id: str, payload: dict) -> dict | None:
         project["description"] = payload["description"] or ""
 
     if "datasets" in payload:
-        old_ids = {
-            ds.get("datasetId")
-            for ds in (project.get("datasets") or [])
-            if ds.get("datasetId")
-        }
-        new_datasets = payload["datasets"] or []
-        new_ids = {
-            ds.get("datasetId")
-            for ds in new_datasets
-            if ds.get("datasetId")
-        }
-
-        for removed_id in old_ids - new_ids:
-            dataset_service.delete_dataset(user_id, removed_id)
-
-        project["datasets"] = new_datasets
+        project["datasets"] = payload["datasets"] or []
 
     if "editorState" in payload:
         project["editorState"] = payload["editorState"] or {"components": []}
