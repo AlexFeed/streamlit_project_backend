@@ -306,6 +306,65 @@ class DatasetPreviewTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()["rows"][0]["sales"], 10)
 
+    def test_inspect_and_preview_excel_sheets(self):
+        import io
+        from fastapi import UploadFile
+
+        with tempfile.TemporaryDirectory() as directory:
+            datasets_dir = Path(directory)
+            excel_buffer = io.BytesIO()
+            with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+                pd.DataFrame({"a": [1, 2]}).to_excel(writer, sheet_name="SheetA", index=False)
+                pd.DataFrame({"b": [3, 4]}).to_excel(writer, sheet_name="SheetB", index=False)
+            excel_bytes = excel_buffer.getvalue()
+
+            upload_file = UploadFile(
+                filename="test.xlsx",
+                file=io.BytesIO(excel_bytes),
+            )
+            sheets = dataset_service.inspect_excel_sheets(upload_file)
+            self.assertEqual(sheets, ["SheetA", "SheetB"])
+
+            with patch.object(dataset_service, "DATASETS_DIR", datasets_dir):
+                saved = dataset_service.save_dataset(
+                    user_id="user-1",
+                    file=upload_file,
+                    custom_name="custom_report",
+                    sheet_name="SheetB",
+                )
+                self.assertEqual(saved["name"], "custom_report.xlsx")
+                self.assertEqual(saved["sheetName"], "SheetB")
+                self.assertEqual(saved["fields"], ["b"])
+
+                preview = dataset_service.get_dataset_preview("user-1", saved["datasetId"])
+                self.assertEqual(preview["fields"], ["b"])
+                self.assertEqual(preview["rows"][0]["b"], 3)
+
+    def test_save_and_preview_tsv(self):
+        import io
+        from fastapi import UploadFile
+
+        with tempfile.TemporaryDirectory() as directory:
+            datasets_dir = Path(directory)
+            tsv_data = "col1\tcol2\n10\t20\n".encode("utf-8")
+            upload_file = UploadFile(
+                filename="data.tsv",
+                file=io.BytesIO(tsv_data),
+            )
+
+            with patch.object(dataset_service, "DATASETS_DIR", datasets_dir):
+                saved = dataset_service.save_dataset(
+                    user_id="user-1",
+                    file=upload_file,
+                    delimiter="\t",
+                )
+                self.assertEqual(saved["format"], "tsv")
+                self.assertEqual(saved["delimiter"], "\t")
+
+                preview = dataset_service.get_dataset_preview("user-1", saved["datasetId"])
+                self.assertEqual(preview["fields"], ["col1", "col2"])
+                self.assertEqual(preview["rows"][0]["col1"], 10)
+
 
 class GeneratorTests(unittest.TestCase):
     def test_generated_dashboard_is_valid_python(self):
@@ -324,6 +383,29 @@ class GeneratorTests(unittest.TestCase):
         self.assertIn("render_filter", code)
         self.assertIn("render_metric", code)
         self.assertIn("components_from_schema", code)
+
+    def test_generated_dashboard_with_excel_and_custom_delimiter_is_valid_python(self):
+        schema = make_schema()
+        schema["dataSources"] = [
+            {
+                "type": "backend_dataset",
+                "datasetId": "ds-excel",
+                "name": "report.xlsx",
+                "format": "excel",
+                "sheetName": "Лист2",
+            },
+            {
+                "type": "backend_dataset",
+                "datasetId": "ds-tsv",
+                "name": "data.tsv",
+                "format": "tsv",
+                "delimiter": "\t",
+            },
+        ]
+        code = generate_streamlit_code(validate_dashboard_schema(schema))
+        compile(code, "generated_app_excel.py", "exec")
+        self.assertIn("pd.read_excel", code)
+        self.assertIn("'sheetName': 'Лист2'", code)
 
     def test_generates_every_supported_chart_type(self):
         for chart_type in (

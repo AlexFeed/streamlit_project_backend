@@ -48,16 +48,34 @@ datasets_paths = data.get("datasetsPaths") or {}
 
 # Кэширование загруженных источников данных
 @st.cache_data(show_spinner=False)
-def load_dataset(path: str):
-    return pd.read_csv(path, low_memory=False)
+def load_dataset(path: str, file_format: str | None = None, delimiter: str | None = None, sheet_name: str | None = None):
+    lower_path = path.lower()
+    if file_format == "excel" or lower_path.endswith((".xlsx", ".xls")):
+        return pd.read_excel(path, sheet_name=sheet_name or 0)
 
+    sep = delimiter if delimiter else ("\t" if lower_path.endswith(".tsv") else ",")
+    return pd.read_csv(path, sep=sep, low_memory=False)
+
+
+data_sources_by_id = {
+    ds.get("datasetId"): ds
+    for ds in schema.get("dataSources", [])
+    if ds.get("datasetId")
+}
 
 datasets = {}
 for ds_id, file_path in datasets_paths.items():
+    ds_config = data_sources_by_id.get(ds_id, {})
     try:
-        datasets[ds_id] = load_dataset(file_path)
+        datasets[ds_id] = load_dataset(
+            file_path,
+            file_format=ds_config.get("format"),
+            delimiter=ds_config.get("delimiter"),
+            sheet_name=ds_config.get("sheetName"),
+        )
     except Exception as error:
-        st.error(f"Ошибка чтения CSV ({ds_id}): {error}")
+        display_name = ds_config.get("name") or ds_id
+        st.error(f"Ошибка чтения данных ({display_name}): {error}")
         st.stop()
 
 dashboard_title = schema.get("dashboard", {}).get("title") or "Streamlit Dashboard"

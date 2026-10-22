@@ -35,6 +35,9 @@ class DataSource(BaseModel):
     type: Literal["backend_dataset"] = "backend_dataset"
     dataset_id: str | None = Field(default=None, alias="datasetId")
     name: str = "data.csv"
+    format: str | None = "csv"
+    delimiter: str | None = None
+    sheet_name: str | None = Field(default=None, alias="sheetName")
     fields: list[str] = Field(default_factory=list)
 
 

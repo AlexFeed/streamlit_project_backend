@@ -71,7 +71,7 @@ async def generate_dashboard(payload: dict, current_user: Annotated[
             zip_file.write(dataset_path, f"data/{file_name}")
         zip_file.writestr(
             "requirements.txt",
-            "streamlit>=1.57\npandas>=2.2\n",
+            ("streamlit>=1.57\npandas>=2.2\nopenpyxl>=3.1\n" if any(str(fn).lower().endswith((".xlsx", ".xls")) for _, fn in dataset_files) else "streamlit>=1.57\npandas>=2.2\n"),
         )
         # Helpful files for users who download and run locally
         zip_file.writestr(
