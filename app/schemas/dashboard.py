@@ -5,9 +5,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 Aggregation = Literal["none", "sum", "mean", "count", "min", "max"]
 SortOrder = Literal["none", "asc", "desc"]
-FilterWidget = Literal["selectbox", "radio", "segmented", "pills", "multiselect"]
-Surface = Literal["none", "soft", "card"]
-DEFAULT_PAGE_ID = "page-main"
 
 
 class Layout(BaseModel):
@@ -32,16 +29,6 @@ class DashboardMeta(BaseModel):
     grid: DashboardGrid = Field(default_factory=DashboardGrid)
 
 
-class DashboardPage(BaseModel):
-    id: str = Field(min_length=1)
-    title: str = Field(min_length=1)
-    order: int = Field(ge=1)
-
-
-def default_dashboard_pages():
-    return [DashboardPage(id=DEFAULT_PAGE_ID, title="Главная", order=1)]
-
-
 class DataSource(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -58,46 +45,7 @@ class ComponentBase(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     id: str
-    page_id: str = Field(default=DEFAULT_PAGE_ID, alias="pageId")
     dataset_id: str | None = Field(default=None, alias="datasetId")
-    parent_id: str | None = Field(default=None, alias="parentId")
-    surface: Surface = "card"
-    show_border: bool | None = Field(default=None, alias="showBorder")
-    show_background: bool | None = Field(default=None, alias="showBackground")
-    content_alignment: Literal["left", "center", "right"] = Field(
-        default="left",
-        alias="contentAlignment",
-    )
-    vertical_alignment: Literal["top", "center", "bottom"] = Field(
-        default="top",
-        alias="verticalAlignment",
-    )
-    padding: int = Field(default=12, ge=0, le=32)
-    content_width: Literal["content", "stretch"] = Field(
-        default="stretch",
-        alias="contentWidth",
-    )
-    height_mode: Literal["auto", "fixed"] | None = Field(
-        default=None,
-        alias="heightMode",
-    )
-    element_font_size: Literal["auto", "12", "14", "16", "18", "20", "24", "28", "32"] = Field(
-        default="auto",
-        alias="elementFontSize",
-    )
-    element_text_color: str = Field(
-        default="#d4d4d8",
-        alias="elementTextColor",
-        pattern=r"^#[0-9a-fA-F]{6}$",
-    )
-    element_font_weight: Literal["normal", "bold"] = Field(
-        default="normal",
-        alias="elementFontWeight",
-    )
-    element_font_style: Literal["normal", "italic"] = Field(
-        default="normal",
-        alias="elementFontStyle",
-    )
     order: int = Field(ge=1)
     layout: Layout = Field(default_factory=Layout)
     title: str = ""
@@ -107,7 +55,6 @@ class SelectboxFilter(ComponentBase):
     type: Literal["selectbox"]
     field: str
     scope: Literal["global"] = "global"
-    widget: FilterWidget = "selectbox"
 
 
 class ChartView(ComponentBase):
@@ -134,10 +81,6 @@ class ChartView(ComponentBase):
         min_length=2,
         max_length=8,
     )
-    axis_label_font_size: int = Field(default=11, alias="axisLabelFontSize", ge=8, le=24)
-    axis_label_color: str = Field(default="#94a3b8", alias="axisLabelColor", pattern=r"^#[0-9a-fA-F]{6}$")
-    axis_title_font_size: int = Field(default=12, alias="axisTitleFontSize", ge=8, le=24)
-    axis_title_color: str = Field(default="#94a3b8", alias="axisTitleColor", pattern=r"^#[0-9a-fA-F]{6}$")
 
     @field_validator("palette")
     @classmethod
@@ -169,7 +112,6 @@ class MetricView(ComponentBase):
 
 class TextView(ComponentBase):
     type: Literal["text"]
-    surface: Surface = "none"
     content: str = Field(min_length=1)
     font_size: int = Field(default=16, alias="fontSize", ge=12, le=32)
     font_weight: Literal["normal", "bold"] = Field(
@@ -187,42 +129,8 @@ class TextView(ComponentBase):
     )
 
 
-class PageLinkView(ComponentBase):
-    type: Literal["page_link"]
-    surface: Surface = "none"
-    target_page_id: str = Field(min_length=1, alias="targetPageId")
-    display_style: Literal["button", "link"] = Field(
-        default="button",
-        alias="displayStyle",
-    )
-
-
-class TableView(ComponentBase):
-    type: Literal["table"]
-    columns: list[str] = Field(default_factory=list)
-    row_limit: int = Field(default=50, alias="rowLimit", ge=1, le=500)
-    hide_index: bool = Field(default=True, alias="hideIndex")
-
-
-class LayoutGroupView(ComponentBase):
-    type: Literal["layout_group"]
-    surface: Surface = "none"
-    direction: Literal["vertical", "horizontal"] = "vertical"
-    gap: int = Field(default=8, ge=0, le=32)
-    padding: int = Field(default=8, ge=0, le=32)
-    horizontal_alignment: Literal["left", "center", "right", "distribute"] = Field(
-        default="left",
-        alias="horizontalAlignment",
-    )
-    vertical_alignment: Literal["top", "center", "bottom", "distribute"] = Field(
-        default="top",
-        alias="verticalAlignment",
-    )
-    wrap: bool = True
-
-
 DashboardView = Annotated[
-    Union[ChartView, MetricView, TextView, PageLinkView, TableView, LayoutGroupView],
+    Union[ChartView, MetricView, TextView],
     Field(discriminator="type"),
 ]
 
@@ -232,10 +140,6 @@ class DashboardSchema(BaseModel):
 
     version: Literal[1, 2] = 2
     dashboard: DashboardMeta
-    pages: list[DashboardPage] = Field(
-        default_factory=default_dashboard_pages,
-        min_length=1,
-    )
     data_sources: list[DataSource] = Field(alias="dataSources", min_length=1)
     filters: list[SelectboxFilter] = Field(default_factory=list)
     views: list[DashboardView] = Field(default_factory=list)
@@ -248,48 +152,16 @@ class DashboardSchema(BaseModel):
             raise ValueError("Component ids must be unique")
         return components
 
-    @field_validator("pages")
-    @classmethod
-    def page_ids_must_be_unique(cls, pages):
-        ids = [page.id for page in pages]
-        if len(ids) != len(set(ids)):
-            raise ValueError("Page ids must be unique")
-        return pages
-
     @model_validator(mode="after")
     def charts_must_keep_readable_height(self):
-        page_ids = {page.id for page in self.pages}
-        components = [*self.filters, *self.views]
-        groups = {
-            component.id: component
-            for component in components
-            if component.type == "layout_group"
-        }
-        for component in components:
-            if component.page_id not in page_ids:
-                raise ValueError(
-                    f'Component page "{component.page_id}" does not exist'
-                )
+        for component in [*self.filters, *self.views]:
             if (
-                component.type == "page_link"
-                and component.target_page_id not in page_ids
-            ):
-                raise ValueError(
-                    f'Target page "{component.target_page_id}" does not exist'
-                )
-            if (
-                component.type not in {"text", "metric", "selectbox", "page_link", "layout_group"}
+                component.type not in {"text", "metric", "selectbox"}
                 and component.layout.height < 120
             ):
                 raise ValueError(
                     "Chart height must be at least 120 pixels"
                 )
-            if component.type == "layout_group" and component.parent_id:
-                raise ValueError("Layout groups cannot be nested")
-            if component.parent_id:
-                parent = groups.get(component.parent_id)
-                if parent is None or parent.page_id != component.page_id:
-                    raise ValueError("Component parent must be a layout group on the same page")
         return self
 
 
