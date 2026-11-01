@@ -4,7 +4,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
-from render_core import render_dashboard
+from render_core import render_multipage_dashboard
 
 # Весь код внутри этого файла запускается на сервере для отображения streamlit приложения без скачивания zip-архива
 
@@ -83,4 +83,4 @@ st.title(dashboard_title)
 st.caption("Интерактивный дашборд, созданный в Streamlit Builder")
 
 # Вызов функции-генератора всего streamlit кода
-render_dashboard(schema, datasets)
+render_multipage_dashboard(schema, datasets)

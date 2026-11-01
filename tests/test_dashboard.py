@@ -96,6 +96,83 @@ class DashboardSchemaTests(unittest.TestCase):
         self.assertEqual(schema["views"][0]["color"], "#818cf8")
         self.assertEqual(schema["dataSources"][0]["datasetId"], "dataset-1")
         self.assertEqual(schema["views"][0]["datasetId"], "dataset-1")
+        self.assertEqual(schema["pages"][0]["id"], "page-main")
+        self.assertEqual(schema["views"][0]["pageId"], "page-main")
+
+    def test_validates_multiple_pages(self):
+        schema = make_schema()
+        schema["pages"] = [
+            {"id": "page-main", "title": "Главная", "order": 1},
+            {"id": "page-details", "title": "Детали", "order": 2},
+        ]
+        schema["views"][0]["pageId"] = "page-details"
+
+        validated = validate_dashboard_schema(schema)
+
+        self.assertEqual(len(validated["pages"]), 2)
+        self.assertEqual(validated["views"][0]["pageId"], "page-details")
+
+    def test_rejects_component_with_unknown_page(self):
+        schema = make_schema()
+        schema["views"][0]["pageId"] = "missing-page"
+
+        with self.assertRaises(ValueError):
+            validate_dashboard_schema(schema)
+
+    def test_validates_filter_variants_navigation_and_table(self):
+        schema = make_schema()
+        schema["pages"] = [
+            {"id": "page-main", "title": "Главная", "order": 1},
+            {"id": "page-details", "title": "Детали", "order": 2},
+        ]
+        schema["filters"][0]["widget"] = "radio"
+        schema["views"].extend([
+            {
+                "id": "table-1",
+                "type": "table",
+                "pageId": "page-main",
+                "datasetId": "dataset-1",
+                "order": 4,
+                "layout": {"width": 8, "height": 320},
+                "title": "Продажи",
+                "columns": ["region", "sales"],
+                "rowLimit": 25,
+                "hideIndex": True,
+            },
+            {
+                "id": "link-1",
+                "type": "page_link",
+                "pageId": "page-main",
+                "datasetId": None,
+                "order": 5,
+                "layout": {"width": 3, "height": 60},
+                "title": "Подробнее",
+                "targetPageId": "page-details",
+                "displayStyle": "button",
+            },
+        ])
+
+        validated = validate_dashboard_schema(schema)
+
+        self.assertEqual(validated["filters"][0]["widget"], "radio")
+        self.assertEqual(validated["views"][-2]["columns"], ["region", "sales"])
+        self.assertEqual(validated["views"][-1]["targetPageId"], "page-details")
+
+    def test_rejects_navigation_to_unknown_target_page(self):
+        schema = make_schema()
+        schema["views"].append({
+            "id": "link-1",
+            "type": "page_link",
+            "pageId": "page-main",
+            "order": 4,
+            "layout": {"width": 3, "height": 60},
+            "title": "Подробнее",
+            "targetPageId": "missing-page",
+            "displayStyle": "link",
+        })
+
+        with self.assertRaises(ValueError):
+            validate_dashboard_schema(schema)
 
     def test_rejects_invalid_width(self):
         schema = make_schema()
@@ -621,12 +698,35 @@ class GeneratorTests(unittest.TestCase):
 
         code = generate_streamlit_code(validate_dashboard_schema(schema))
 
-        self.assertIn("placements = pack_components(components_from_schema(schema))", code)
-        self.assertIn("dashboard_grid_style(placements)", code)
+        self.assertIn("placements = pack_components(components_from_schema(schema, page_id))", code)
+        self.assertIn("dashboard_grid_style(", code)
+        self.assertIn("all_components_from_schema(schema, page_id)", code)
         self.assertIn('with st.container(key="dashboard_grid"):', code)
         self.assertIn('grid_pixel_height(item["h"])', code)
         self.assertIn("render_component(", code)
         self.assertIn('[*schema.get("filters", []), *schema.get("views", [])]', code)
+
+    def test_generated_dashboard_uses_native_page_navigation(self):
+        schema = make_schema()
+        schema["pages"] = [
+            {"id": "page-main", "title": "Главная", "order": 1},
+            {"id": "page-details", "title": "Детали", "order": 2},
+        ]
+        schema["views"][0]["pageId"] = "page-details"
+
+        validated = validate_dashboard_schema(schema)
+        code = generate_streamlit_code(validated)
+
+        self.assertIn('list(navigation_pages.values())', code)
+        self.assertIn('position="top" if len(pages) > 1 else "hidden"', code)
+        self.assertIn("render_multipage_dashboard(DASHBOARD_SCHEMA, datasets)", code)
+        self.assertEqual(
+            [component["id"] for component in render_core.components_from_schema(
+                validated,
+                "page-details",
+            )],
+            ["chart-1"],
+        )
 
     def test_staggered_canvas_uses_exact_css_grid_coordinates(self):
         code = generate_streamlit_code(
@@ -750,6 +850,56 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual(app.selectbox[0].value, "A")
         self.assertEqual(len(app.exception), 0)
 
+    def test_generated_multipage_dashboard_starts(self):
+        schema = make_schema()
+        schema["pages"] = [
+            {"id": "page-main", "title": "Главная", "order": 1},
+            {"id": "page-details", "title": "Детали", "order": 2},
+        ]
+        schema["views"][0]["pageId"] = "page-details"
+        schema["views"].extend([
+            {
+                "id": "table-1",
+                "type": "table",
+                "pageId": "page-main",
+                "datasetId": "dataset-1",
+                "order": 4,
+                "layout": {"width": 8, "height": 240},
+                "title": "Продажи",
+                "columns": ["region", "sales"],
+                "rowLimit": 10,
+                "hideIndex": True,
+            },
+            {
+                "id": "link-1",
+                "type": "page_link",
+                "pageId": "page-main",
+                "order": 5,
+                "layout": {"width": 3, "height": 60},
+                "title": "Подробнее",
+                "targetPageId": "page-details",
+                "displayStyle": "link",
+            },
+        ])
+        code = generate_streamlit_code(validate_dashboard_schema(schema))
+
+        with tempfile.TemporaryDirectory() as directory:
+            project_dir = Path(directory)
+            data_dir = project_dir / "data"
+            data_dir.mkdir()
+            (project_dir / "app.py").write_text(code, encoding="utf-8")
+            (data_dir / "sales.csv").write_text(
+                "date,region,sales\n2026-01-01,A,10\n2026-01-02,B,20\n",
+                encoding="utf-8",
+            )
+
+            app = AppTest.from_file(project_dir / "app.py", default_timeout=20)
+            app.run()
+
+        self.assertEqual(len(app.exception), 0)
+        self.assertEqual(len(app.dataframe), 1)
+        self.assertEqual(len(app.page_link), 1)
+
     def test_generated_dashboard_executes_in_streamlit_bare_mode(self):
         schema = make_schema()
         schema["views"][0].update({
@@ -791,7 +941,175 @@ class GeneratorTests(unittest.TestCase):
 
 
 class RuntimeRendererTests(unittest.TestCase):
-    def test_metric_renderer_centers_value_in_compact_card(self):
+    def test_auto_height_text_wraps_its_content_even_with_border(self):
+        component = {
+            "id": "text-1",
+            "type": "text",
+            "content": "Короткий текст",
+            "heightMode": "auto",
+            "showBorder": True,
+            "showBackground": True,
+            "layout": {"height": 180},
+        }
+
+        with (
+            patch.object(render_core.st, "container") as container_mock,
+            patch.object(render_core, "render_text"),
+        ):
+            render_core.render_component(
+                component,
+                None,
+                None,
+                container_height=200,
+            )
+
+        self.assertEqual(container_mock.call_args.kwargs["height"], "content")
+        self.assertTrue(container_mock.call_args.kwargs["border"])
+
+    def test_nested_components_receive_their_own_styles(self):
+        group = {
+            "id": "navigation",
+            "type": "layout_group",
+            "order": 1,
+            "elementTextColor": "#84cc16",
+            "layout": {"width": 3, "height": 240},
+        }
+        link = {
+            "id": "page-link",
+            "type": "page_link",
+            "parentId": "navigation",
+            "order": 2,
+            "elementTextColor": "#60a5fa",
+            "layout": {"height": 60},
+        }
+        style = render_core.dashboard_grid_style(
+            [{"x": 0, "y": 0, "w": 3, "h": 4, "component": group}],
+            [group, link],
+        )
+
+        self.assertIn("st-key-card_builder_filter_navigation", style)
+        self.assertIn("st-key-card_builder_filter_page_link", style)
+        self.assertIn("color: #60a5fa !important", style)
+
+    def test_grouped_page_link_uses_content_height(self):
+        component = {
+            "id": "link-1",
+            "type": "page_link",
+            "showBorder": True,
+            "showBackground": True,
+            "layout": {"height": 120},
+        }
+
+        with (
+            patch.object(render_core.st, "container") as container_mock,
+            patch.object(render_core, "render_page_link"),
+        ):
+            render_core.render_component(
+                component,
+                None,
+                None,
+                navigation_pages={},
+                grouped=True,
+            )
+
+        self.assertEqual(container_mock.call_args.kwargs["height"], "content")
+
+    def test_auto_height_text_is_not_stretched_to_grid_row(self):
+        component = {
+            "id": "text-1",
+            "type": "text",
+            "heightMode": "auto",
+            "showBorder": True,
+            "padding": 0,
+            "layout": {"x": 0, "y": 0, "width": 6, "height": 60},
+        }
+        style = render_core.dashboard_grid_style([
+            {"x": 0, "y": 0, "w": 6, "h": 1, "component": component},
+        ])
+
+        self.assertIn("height: auto;", style)
+        self.assertIn("align-self: start;", style)
+        self.assertIn("height: auto !important;", style)
+        self.assertIn("min-height: 26px;", style)
+        self.assertIn("min-height: 26px !important;", style)
+        self.assertIn("justify-content: flex-start !important;", style)
+        self.assertIn("padding-inline: 4px;", style)
+        self.assertIn('[data-testid="stElementContainer"]', style)
+        self.assertIn('[data-testid="stMarkdown"]', style)
+
+    def test_page_link_does_not_create_a_visible_card(self):
+        component = {
+            "id": "link-1",
+            "type": "page_link",
+            "title": "Подробнее",
+            "targetPageId": "page-details",
+            "displayStyle": "link",
+            "layout": {"height": 60},
+        }
+
+        with (
+            patch.object(render_core.st, "container") as container_mock,
+            patch.object(render_core, "render_page_link"),
+        ):
+            render_core.render_component(
+                component,
+                None,
+                None,
+                container_height=92,
+                navigation_pages={"page-details": object()},
+            )
+
+        self.assertEqual(container_mock.call_args.kwargs["height"], "content")
+        self.assertFalse(container_mock.call_args.kwargs["border"])
+
+    def test_table_renderer_uses_filtered_rows_and_selected_columns(self):
+        component = {
+            "columns": ["region", "sales"],
+            "rowLimit": 2,
+            "hideIndex": True,
+        }
+        dataframe = pd.DataFrame({
+            "region": ["A", "B", "C"],
+            "sales": [10, 20, 30],
+            "internal": [1, 2, 3],
+        })
+
+        with patch.object(render_core.st, "dataframe") as dataframe_mock:
+            render_core.render_table(component, dataframe, 220)
+
+        rendered = dataframe_mock.call_args.args[0]
+        self.assertEqual(list(rendered.columns), ["region", "sales"])
+        self.assertEqual(len(rendered), 2)
+        self.assertEqual(dataframe_mock.call_args.kwargs["height"], 220)
+
+    def test_multiselect_filter_accepts_multiple_values(self):
+        schema = {
+            "filters": [{
+                "id": "filter-1",
+                "type": "selectbox",
+                "field": "region",
+                "widget": "multiselect",
+                "datasetId": "dataset-1",
+                "order": 1,
+            }],
+        }
+        datasets = {
+            "dataset-1": pd.DataFrame({
+                "region": ["A", "B", "C"],
+                "sales": [10, 20, 30],
+            }),
+        }
+
+        with patch.object(
+            render_core,
+            "selected_filter_value",
+            return_value=["A", "C"],
+        ):
+            filtered = render_core.apply_filters(schema, datasets)
+
+        self.assertEqual(filtered["dataset-1"]["region"].tolist(), ["A", "C"])
+
+    def test_metric_renderer_uses_native_streamlit_component(self):
         component = {
             "title": "Продажи",
             "field": "sales",
@@ -800,14 +1118,31 @@ class RuntimeRendererTests(unittest.TestCase):
         }
         dataframe = pd.DataFrame({"sales": [10, 20]})
 
-        with patch.object(render_core.st, "markdown") as markdown_mock:
+        with patch.object(render_core.st, "metric") as metric_mock:
             render_core.render_metric(component, dataframe)
 
-        rendered_html = markdown_mock.call_args.args[0]
-        self.assertIn("justify-content:center", rendered_html)
-        self.assertIn("min-height:32px", rendered_html)
-        self.assertIn(">30<", rendered_html)
-        self.assertNotIn("sum · sales", rendered_html)
+        metric_mock.assert_called_once_with(
+            label="Продажи",
+            value="30",
+            help=None,
+            border=False,
+            width="stretch",
+            height="content",
+        )
+
+    def test_metric_renderer_uses_optional_description_as_help(self):
+        component = {
+            "title": "Продажи",
+            "description": "Сумма за период",
+            "field": "sales",
+            "aggregation": "sum",
+        }
+        dataframe = pd.DataFrame({"sales": [10, 20]})
+
+        with patch.object(render_core.st, "metric") as metric_mock:
+            render_core.render_metric(component, dataframe)
+
+        self.assertEqual(metric_mock.call_args.kwargs["help"], "Сумма за период")
 
     def test_compact_components_use_shorter_grid_rows(self):
         metric = {"type": "metric", "layout": {"height": 140}}
@@ -856,6 +1191,22 @@ class RuntimeRendererTests(unittest.TestCase):
         self.assertIn("text-align: center", rendered_html)
         self.assertIn("&lt;script&gt;", rendered_html)
         self.assertNotIn("<script>", rendered_html)
+
+    def test_text_renderer_uses_native_markdown_for_default_style(self):
+        component = {
+            "title": "Комментарий",
+            "content": "Обычный текст",
+        }
+
+        with patch.object(render_core.st, "markdown") as markdown_mock:
+            render_core.render_text(component)
+
+        self.assertEqual(markdown_mock.call_args_list[0].args[0], "**Комментарий**")
+        self.assertEqual(markdown_mock.call_args_list[1].args[0], "Обычный текст")
+        self.assertNotIn(
+            "unsafe_allow_html",
+            markdown_mock.call_args_list[1].kwargs,
+        )
 
     def test_runtime_renders_native_dashboard(self):
         dataframe = pd.DataFrame({

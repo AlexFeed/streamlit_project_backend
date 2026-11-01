@@ -10,6 +10,6 @@ def render_export_dashboard_code(schema: dict) -> list[str]:
         "",
         *core_code.strip().splitlines(),
         "",
-        "render_dashboard(DASHBOARD_SCHEMA, datasets)",
+        "render_multipage_dashboard(DASHBOARD_SCHEMA, datasets)",
         "",
     ]
