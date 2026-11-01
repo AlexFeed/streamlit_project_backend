@@ -19,7 +19,7 @@ NATIVE_PAGE_STYLE = """
   .block-container {
     width: 100%;
     max-width: 1540px;
-    padding: 4.25rem 2rem 3rem;
+    padding: 1.6rem 2rem 3rem;
   }
   .block-container h1 {
     margin: 0;

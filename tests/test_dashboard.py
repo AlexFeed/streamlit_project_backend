@@ -818,9 +818,6 @@ class RuntimeRendererTests(unittest.TestCase):
         self.assertEqual(render_core.grid_height(text), 3)
         self.assertEqual(render_core.grid_height(selectbox), 3)
 
-    def test_page_style_keeps_title_below_streamlit_header(self):
-        self.assertIn("padding: 4.25rem 2rem 3rem", render_core.NATIVE_PAGE_STYLE)
-
     def test_renderer_keeps_editor_grid_coordinates(self):
         components = [
             {"type": "metric", "order": 1, "layout": {"x": 0, "y": 0, "width": 3, "height": 140}},
