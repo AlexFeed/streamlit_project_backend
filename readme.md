@@ -225,13 +225,15 @@ storage/projects/<userId>/<projectId>/
   "userId": "uuid",
   "title": "Sales dashboard",
   "description": "Анализ продаж по регионам",
+  "previewImage": "data:image/jpeg;base64,...",
   "dataset": {
     "datasetId": "uuid",
     "name": "sales.csv",
     "fields": ["date", "sales", "region"]
   },
   "editorState": {
-    "components": []
+    "components": [],
+    "previewImage": "data:image/jpeg;base64,..."
   },
   "schema": {
     "version": 2,
@@ -466,7 +468,7 @@ Authorization: Bearer <token>
 
 ## 🔹 GET `/projects`
 
-Возвращает список проектов пользователя (отсортированный по `updatedAt` по убыванию) для главной страницы.
+Возвращает список проектов пользователя (отсортированный по `updatedAt` по убыванию) для главной страницы. Поле `previewImage` содержит JPEG/PNG data URL для превью холста; для старых проектов значение также читается из `editorState.previewImage`.
 
 ### Response `200`
 
@@ -477,6 +479,7 @@ Authorization: Bearer <token>
     "title": "Sales dashboard",
     "description": "Анализ продаж по отделам",
     "datasetName": "sales.csv",
+    "previewImage": "data:image/jpeg;base64,...",
     "createdAt": "2026-10-10T12:00:00",
     "updatedAt": "2026-10-10T12:30:00"
   }
@@ -501,8 +504,10 @@ Authorization: Bearer <token>
     "fields": ["date", "region", "sales"]
   },
   "editorState": {
-    "components": []
+    "components": [],
+    "previewImage": "data:image/jpeg;base64,..."
   },
+  "previewImage": "data:image/jpeg;base64,...",
   "schema": {
     "version": 2,
     "dashboard": {
@@ -525,7 +530,7 @@ Authorization: Bearer <token>
 
 ## 🔹 GET `/projects/{projectId}`
 
-Возвращает полный объект проекта (`id`, `userId`, `title`, `description`, `dataset`, `editorState`, `schema`, `createdAt`, `updatedAt`) для восстановления состояния конструктора при открытии `/editor/:projectId`.
+Возвращает полный объект проекта (`id`, `userId`, `title`, `description`, `dataset`, `editorState`, `previewImage`, `schema`, `createdAt`, `updatedAt`) для восстановления состояния конструктора при открытии `/editor/:projectId`. Превью находится на верхнем уровне и внутри `editorState` для совместимости; допускаются JPEG/PNG data URL до 4 MiB декодированного изображения.
 
 ---
 

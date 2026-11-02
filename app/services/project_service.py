@@ -1,13 +1,21 @@
+import base64
+import binascii
 import json
+import shutil
 import uuid
 from datetime import datetime
-import shutil
 from pathlib import Path
 
 from app.schemas.dashboard import validate_dashboard_schema
 from app.services import dataset_service
 
 PROJECTS_DIR = Path("storage/projects")
+MAX_PREVIEW_IMAGE_BYTES = 4 * 1024 * 1024
+PREVIEW_IMAGE_TYPES = {
+    "image/jpeg": b"\xff\xd8\xff",
+    "image/png": b"\x89PNG\r\n\x1a\n",
+}
+
 
 def _now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
@@ -21,6 +29,42 @@ def _project_file(user_id: str, project_id: str) -> Path:
     return _project_dir(user_id, project_id) / "project.json"
 
 
+def _validate_preview_image(value: object) -> str | None:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or len(value) > MAX_PREVIEW_IMAGE_BYTES * 2:
+        raise ValueError("Preview image is invalid or too large")
+
+    try:
+        header, encoded_image = value.split(",", maxsplit=1)
+        media_type = header.removeprefix("data:").removesuffix(";base64")
+        expected_signature = PREVIEW_IMAGE_TYPES.get(media_type)
+        if expected_signature is None:
+            raise ValueError("Preview image must be a JPEG or PNG data URL")
+
+        image_bytes = base64.b64decode(encoded_image, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise ValueError("Preview image is not a valid base64 data URL") from error
+
+    if (
+        len(image_bytes) > MAX_PREVIEW_IMAGE_BYTES
+        or not image_bytes.startswith(expected_signature)
+    ):
+        raise ValueError("Preview image is invalid or too large")
+
+    return value
+
+
+def _project_preview_image(project: dict) -> str | None:
+    editor_state = project.get("editorState")
+    nested_preview = (
+        editor_state.get("previewImage")
+        if isinstance(editor_state, dict)
+        else None
+    )
+    return project.get("previewImage") or nested_preview
+
+
 def create_project(user_id: str, payload: dict) -> dict:
     project_id = str(uuid.uuid4())
     now = _now()
@@ -29,13 +73,27 @@ def create_project(user_id: str, payload: dict) -> dict:
     if schema:
         schema = validate_dashboard_schema(schema)
 
+    editor_state = payload.get("editorState") or {"components": []}
+    preview_image = _validate_preview_image(
+        payload.get("previewImage")
+        if "previewImage" in payload
+        else (
+            editor_state.get("previewImage")
+            if isinstance(editor_state, dict)
+            else None
+        )
+    )
+    if preview_image and isinstance(editor_state, dict):
+        editor_state = {**editor_state, "previewImage": preview_image}
+
     project = {
         "id": project_id,
         "userId": user_id,
         "title": payload.get("title") or "Untitled dashboard",
         "description": payload.get("description") or "",
+        "previewImage": preview_image,
         "datasets": payload.get("datasets") or [],
-        "editorState": payload.get("editorState") or {"components": []},
+        "editorState": editor_state,
         "schema": schema,
         "createdAt": now,
         "updatedAt": now,
@@ -76,6 +134,28 @@ def update_project(user_id: str, project_id: str, payload: dict) -> dict | None:
 
     if "editorState" in payload:
         project["editorState"] = payload["editorState"] or {"components": []}
+
+    if "previewImage" in payload:
+        preview_image = _validate_preview_image(payload["previewImage"])
+    elif (
+        "editorState" in payload
+        and isinstance(project["editorState"], dict)
+        and "previewImage" in project["editorState"]
+    ):
+        preview_image = _validate_preview_image(
+            project["editorState"]["previewImage"]
+        )
+    else:
+        preview_image = _project_preview_image(project)
+
+    project["previewImage"] = preview_image
+    if isinstance(project["editorState"], dict):
+        editor_state = dict(project["editorState"])
+        if preview_image:
+            editor_state["previewImage"] = preview_image
+        else:
+            editor_state.pop("previewImage", None)
+        project["editorState"] = editor_state
 
     if "schema" in payload:
         schema = payload["schema"]
@@ -121,6 +201,7 @@ def list_projects(user_id: str) -> list[dict]:
             "title": project.get("title", "Untitled dashboard"),
             "description": project.get("description", ""),
             "datasetName": dataset_names,
+            "previewImage": _project_preview_image(project),
             "createdAt": project.get("createdAt"),
             "updatedAt": project.get("updatedAt"),
         })
