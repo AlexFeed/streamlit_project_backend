@@ -366,6 +366,60 @@ class DatasetPreviewTests(unittest.TestCase):
                 self.assertEqual(preview["fields"], ["col1", "col2"])
                 self.assertEqual(preview["rows"][0]["col1"], 10)
 
+    def test_save_and_preview_cp1251_csv(self):
+        import io
+        from fastapi import UploadFile
+
+        with tempfile.TemporaryDirectory() as directory:
+            datasets_dir = Path(directory)
+            csv_text = "город;продажи\nМосква;150\nСанкт-Петербург;230\n"
+            csv_bytes = csv_text.encode("cp1251")
+            upload_file = UploadFile(
+                filename="sales_cp1251.csv",
+                file=io.BytesIO(csv_bytes),
+            )
+
+            with patch.object(dataset_service, "DATASETS_DIR", datasets_dir):
+                saved = dataset_service.save_dataset(
+                    user_id="user-1",
+                    file=upload_file,
+                )
+                self.assertEqual(saved["format"], "csv")
+                self.assertEqual(saved["delimiter"], ";")
+                self.assertEqual(saved["encoding"], "cp1251")
+                self.assertEqual(saved["fields"], ["город", "продажи"])
+
+                preview = dataset_service.get_dataset_preview("user-1", saved["datasetId"])
+                self.assertEqual(preview["fields"], ["город", "продажи"])
+                self.assertEqual(preview["rows"][0]["город"], "Москва")
+                self.assertEqual(preview["rows"][0]["продажи"], 150)
+
+    def test_save_and_preview_utf8_sig_csv(self):
+        import io
+        from fastapi import UploadFile
+
+        with tempfile.TemporaryDirectory() as directory:
+            datasets_dir = Path(directory)
+            csv_text = "клиент,сумма\nИван,500\nОльга,900\n"
+            csv_bytes = csv_text.encode("utf-8-sig")
+            upload_file = UploadFile(
+                filename="clients_bom.csv",
+                file=io.BytesIO(csv_bytes),
+            )
+
+            with patch.object(dataset_service, "DATASETS_DIR", datasets_dir):
+                saved = dataset_service.save_dataset(
+                    user_id="user-1",
+                    file=upload_file,
+                )
+                self.assertEqual(saved["format"], "csv")
+                self.assertEqual(saved["encoding"], "utf-8-sig")
+                self.assertEqual(saved["fields"], ["клиент", "сумма"])
+
+                preview = dataset_service.get_dataset_preview("user-1", saved["datasetId"])
+                self.assertEqual(preview["fields"], ["клиент", "сумма"])
+                self.assertEqual(preview["rows"][0]["клиент"], "Иван")
+
 
 class AuthSettingsTests(unittest.TestCase):
     def test_registration_saves_name_and_authenticated_user_can_change_password(self):

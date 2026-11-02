@@ -1,9 +1,9 @@
 import base64
 import binascii
 import json
-import shutil
 import uuid
-from datetime import datetime
+from datetime import datetime, UTC
+import shutil
 from pathlib import Path
 
 from app.schemas.dashboard import validate_dashboard_schema
@@ -18,7 +18,7 @@ PREVIEW_IMAGE_TYPES = {
 
 
 def _now() -> str:
-    return datetime.utcnow().isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _project_dir(user_id: str, project_id: str) -> Path:
