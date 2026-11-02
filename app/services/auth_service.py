@@ -42,6 +42,7 @@ class TokenData(BaseModel):
 class User(BaseModel):
     id: str
     email: str
+    name: str | None = None
     createdAt: datetime | None = None
     disabled: bool | None = None
 
@@ -165,8 +166,9 @@ def login_user(email: str, password: str) -> Token:
 
 
 # Регистрация нового пользователя
-def register_user(email: str, password: str) -> dict:
+def register_user(email: str, password: str, name: str | None = None) -> dict:
     email = email.strip().lower()
+    name = name.strip() if name else None
 
     if not email:
         raise ValueError("Email is required")
@@ -188,6 +190,7 @@ def register_user(email: str, password: str) -> dict:
     user_dict = {
         "id": user_id,
         "email": email,
+        "name": name,
         "passwordHash": get_password_hash(password),
         "createdAt": datetime.now(timezone.utc).isoformat(),
         "disabled": False,
@@ -200,6 +203,24 @@ def register_user(email: str, password: str) -> dict:
     return User(
         id=user_dict["id"],
         email=user_dict["email"],
+        name=user_dict["name"],
         createdAt=user_dict["createdAt"],
         disabled=user_dict["disabled"],
     )
+
+
+def change_user_password(
+    user_id: str,
+    current_password: str,
+    new_password: str,
+) -> None:
+    if len(new_password) < 6:
+        raise ValueError("Password must contain at least 6 characters")
+
+    users = _load_users()
+    user = users.get(user_id)
+    if user is None or not verify_password(current_password, user["passwordHash"]):
+        raise ValueError("Current password is incorrect")
+
+    user["passwordHash"] = get_password_hash(new_password)
+    _save_users(users)

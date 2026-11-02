@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from streamlit.testing.v1 import AppTest
 
 from app.api.datasets_routes import router as datasets_router
+from app.api.auth_routes import router as auth_router
 from app.schemas.dashboard import validate_dashboard_schema
 from app.services.generator_service import generate_streamlit_code
 from app.services import auth_service, dataset_service
@@ -364,6 +365,78 @@ class DatasetPreviewTests(unittest.TestCase):
                 preview = dataset_service.get_dataset_preview("user-1", saved["datasetId"])
                 self.assertEqual(preview["fields"], ["col1", "col2"])
                 self.assertEqual(preview["rows"][0]["col1"], 10)
+
+
+class AuthSettingsTests(unittest.TestCase):
+    def test_registration_saves_name_and_authenticated_user_can_change_password(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(
+                auth_service,
+                "USERS_FILE",
+                Path(directory) / "users.json",
+            ):
+                user = auth_service.register_user(
+                    email="test@example.com",
+                    password="old-pass",
+                    name="Test User",
+                )
+                self.assertEqual(user.name, "Test User")
+
+                app = FastAPI()
+                app.include_router(auth_router)
+                app.dependency_overrides[
+                    auth_service.get_current_active_user
+                ] = lambda: user
+                response = TestClient(app).put(
+                    "/auth/password",
+                    json={
+                        "currentPassword": "old-pass",
+                        "newPassword": "new-pass",
+                    },
+                )
+
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(
+                    auth_service.authenticate_user(
+                        auth_service._load_users(),
+                        "test@example.com",
+                        "new-pass",
+                    )
+                )
+                self.assertFalse(
+                    auth_service.authenticate_user(
+                        auth_service._load_users(),
+                        "test@example.com",
+                        "old-pass",
+                    )
+                )
+
+    def test_password_change_rejects_wrong_current_password(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(
+                auth_service,
+                "USERS_FILE",
+                Path(directory) / "users.json",
+            ):
+                user = auth_service.register_user(
+                    email="test@example.com",
+                    password="old-pass",
+                )
+
+                with self.assertRaises(ValueError):
+                    auth_service.change_user_password(
+                        user.id,
+                        "incorrect",
+                        "new-pass",
+                    )
+
+                self.assertTrue(
+                    auth_service.authenticate_user(
+                        auth_service._load_users(),
+                        "test@example.com",
+                        "old-pass",
+                    )
+                )
 
 
 class GeneratorTests(unittest.TestCase):
