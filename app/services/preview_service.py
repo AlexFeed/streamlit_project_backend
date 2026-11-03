@@ -149,6 +149,7 @@ class PreviewService:
         query = urlencode({
             "session_id": session_id,
             "revision": session["revision"],
+            "embed": "true",
         })
 
         return {

@@ -12,14 +12,14 @@ NATIVE_PAGE_STYLE = """
       #09090b;
     color: #f8fafc;
   }
-  [data-testid="stHeader"] {
-    background: rgba(9, 9, 11, .75);
-    backdrop-filter: blur(14px);
+  [data-testid="stHeader"],
+  header[data-testid="stHeader"] {
+    display: none !important;
   }
   .block-container {
     width: 100%;
     max-width: 1540px;
-    padding: 1.6rem 2rem 3rem;
+    padding: 2rem 2.5rem 3rem;
   }
   .block-container h1 {
     margin: 0;
@@ -27,10 +27,12 @@ NATIVE_PAGE_STYLE = """
     font-size: clamp(1.7rem, 2.7vw, 2.45rem);
     font-weight: 760;
     letter-spacing: -.045em;
+    line-height: 1.25;
   }
   [data-testid="stCaptionContainer"] {
-    margin: .35rem 0 1rem;
+    margin: .4rem 0 1.5rem;
     color: #94a3b8;
+    font-size: 0.92rem;
   }
   [data-testid="stVerticalBlockBorderWrapper"] {
     border-color: rgba(148, 163, 184, .15);
@@ -63,7 +65,10 @@ NATIVE_PAGE_STYLE = """
     border-radius: 11px;
     background: #0b0e14;
   }
-  footer { visibility: hidden; }
+  footer {
+    display: none !important;
+    visibility: hidden;
+  }
   @media (max-width: 760px) {
     .block-container {
       padding-right: 1rem;
