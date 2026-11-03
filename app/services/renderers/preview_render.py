@@ -4,7 +4,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
-from render_core import render_dashboard
+from render_core import NATIVE_PAGE_STYLE, render_dashboard
 
 # Весь код внутри этого файла запускается на сервере для отображения streamlit приложения без скачивания zip-архива
 
@@ -18,6 +18,7 @@ st.set_page_config(
     page_icon="📊",
     layout="wide",
 )
+st.markdown(NATIVE_PAGE_STYLE, unsafe_allow_html=True)
 
 # Получение id превью сессии
 params = st.query_params
