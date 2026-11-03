@@ -48,14 +48,19 @@ datasets_paths = data.get("datasetsPaths") or {}
 
 # Кэширование загруженных источников данных
 @st.cache_data(show_spinner=False)
-def load_dataset(path: str, file_format: str | None = None, delimiter: str | None = None, sheet_name: str | None = None):
+def load_dataset(
+        path: str,
+        file_format: str | None = None,
+        delimiter: str | None = None,
+        sheet_name: str | None = None,
+        encoding: str | None = None,
+):
     lower_path = path.lower()
     if file_format == "excel" or lower_path.endswith((".xlsx", ".xls")):
         return pd.read_excel(path, sheet_name=sheet_name or 0)
 
     sep = delimiter if delimiter else ("\t" if lower_path.endswith(".tsv") else ",")
-    return pd.read_csv(path, sep=sep, low_memory=False)
-
+    return pd.read_csv(path, sep=sep, encoding=encoding, low_memory=False)
 
 data_sources_by_id = {
     ds.get("datasetId"): ds
@@ -72,6 +77,7 @@ for ds_id, file_path in datasets_paths.items():
             file_format=ds_config.get("format"),
             delimiter=ds_config.get("delimiter"),
             sheet_name=ds_config.get("sheetName"),
+            encoding=ds_config.get("encoding"),
         )
     except Exception as error:
         display_name = ds_config.get("name") or ds_id

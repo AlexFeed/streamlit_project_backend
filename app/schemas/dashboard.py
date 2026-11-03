@@ -37,6 +37,7 @@ class DataSource(BaseModel):
     name: str = "data.csv"
     format: str | None = "csv"
     delimiter: str | None = None
+    encoding: str | None = None
     sheet_name: str | None = Field(default=None, alias="sheetName")
     fields: list[str] = Field(default_factory=list)
 

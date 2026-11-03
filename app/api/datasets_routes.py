@@ -13,6 +13,7 @@ async def upload_dataset(
         dataset: UploadFile = File(...),
         name: Annotated[str | None, Form()] = None,
         delimiter: Annotated[str | None, Form()] = None,
+        encoding: Annotated[str | None, Form()] = None,
         sheet_name: Annotated[str | None, Form(alias="sheetName")] = None,
 ):
     try:
@@ -21,6 +22,7 @@ async def upload_dataset(
             file=dataset,
             custom_name=name,
             delimiter=delimiter,
+            encoding=encoding,
             sheet_name=sheet_name,
         )
     except ValueError as error:

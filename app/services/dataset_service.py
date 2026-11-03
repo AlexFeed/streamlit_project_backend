@@ -1,3 +1,4 @@
+import codecs
 import csv
 import json
 import re
@@ -56,11 +57,73 @@ def _meta_file(user_id: str, dataset_id: str) -> Path:
     return _dataset_dir(user_id, dataset_id) / "meta.json"
 
 
+def detect_file_encoding(file_path: Path, sample_size: int = 65536) -> str:
+    """
+    Полноценное автоматическое определение кодировки:
+    1. Сигнатуры BOM (utf-8-sig, utf-16-le, utf-16-be)
+    2. Fast-path для валидного UTF-8
+    3. Универсальный детектор charset-normalizer
+    4. Запасной fallback на случай повреждённых данных
+    """
+    with file_path.open("rb") as f:
+        raw = f.read(sample_size)
+
+    if not raw:
+        return "utf-8"
+
+    # 1. Проверка сигнатур BOM (критично для Excel выгрузок)
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return "utf-8-sig"
+    if raw.startswith(b"\xff\xfe"):
+        return "utf-16-le"
+    if raw.startswith(b"\xfe\xff"):
+        return "utf-16-be"
+
+    # 2. проверка строгого UTF-8
+    try:
+        raw.decode("utf-8")
+        return "utf-8"
+    except UnicodeDecodeError:
+        pass
+
+    # 3. Универсальное статистическое распознавание
+    try:
+        import charset_normalizer
+        matches = charset_normalizer.from_bytes(raw)
+        best = matches.best()
+        if best and best.encoding:
+            enc = best.encoding.lower()
+            # mac_cyrillic — частый ложноположительный артефакт charset-normalizer на кириллице:
+            # в реальных системах (Excel, 1C) это всегда Windows-1251 (CP1251)
+            if "mac" in enc and "cyrillic" in enc:
+                return "cp1251"
+            try:
+                return codecs.lookup(enc).name
+            except Exception:
+                return enc
+    except Exception:
+        pass
+
+    # 4. Резервный fallback при сильном повреждении файла
+    try:
+        raw.decode("cp1251")
+        return "cp1251"
+    except UnicodeDecodeError:
+        pass
+
+    raise ValueError(
+        f"Не удалось автоматически определить кодировку файла '{file_path.name}'. "
+        "Пожалуйста, выберите кодировку вручную при загрузке датасета."
+    )
+
+
+
 def save_dataset(
         user_id: str,
         file: UploadFile,
         custom_name: str | None = None,
         delimiter: str | None = None,
+        encoding: str | None = None,
         sheet_name: str | None = None,
 ) -> dict:
     dataset_id = str(uuid.uuid4())
@@ -92,6 +155,7 @@ def save_dataset(
     try:
         if file_format == "excel":
             delimiter = None
+            encoding = None
             with pd.ExcelFile(data_path) as excel_file:
                 available_sheets = excel_file.sheet_names
                 if not available_sheets:
@@ -104,6 +168,11 @@ def save_dataset(
                 df_sample = pd.read_excel(excel_file, sheet_name=sheet_name, nrows=100)
         else:
             sheet_name = None
+
+            if not encoding or encoding == "auto":
+                # Автоопределение кодировки источника данных
+                encoding = detect_file_encoding(data_path)
+
             if not delimiter or delimiter == "auto":
                 # Автоопределение разделителя сниффером Python
                 try:
@@ -114,7 +183,7 @@ def save_dataset(
                 except Exception:
                     delimiter = ","
 
-            df_sample = pd.read_csv(data_path, sep=delimiter, nrows=100)
+            df_sample = pd.read_csv(data_path, sep=delimiter, encoding=encoding, nrows=100)
     except Exception as error:
         shutil.rmtree(dataset_dir, ignore_errors=True)
         raise ValueError(f"Ошибка чтения структуры файла: {error}")
@@ -133,6 +202,7 @@ def save_dataset(
         "name": file_name,
         "format": file_format,
         "delimiter": delimiter,
+        "encoding": encoding,
         "sheetName": sheet_name,
         "fields": fields,
         "fieldTypes": field_types,
@@ -194,10 +264,11 @@ def get_dataset_preview(
                 dataframe = pd.read_excel(excel_file, sheet_name=target_sheet, nrows=safe_limit)
         else:
             delimiter = meta.get("delimiter")
+            encoding = meta.get("encoding")
             if delimiter:
-                dataframe = pd.read_csv(path, sep=delimiter, nrows=safe_limit)
+                dataframe = pd.read_csv(path, sep=delimiter, encoding=encoding, nrows=safe_limit)
             else:
-                dataframe = pd.read_csv(path, nrows=safe_limit)
+                dataframe = pd.read_csv(path, encoding=encoding, nrows=safe_limit)
     except Exception as error:
         raise ValueError(f"Не удалось прочитать датасет: {error}")
 
