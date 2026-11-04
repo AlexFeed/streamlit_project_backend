@@ -3,10 +3,11 @@ import os
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 from render_core import NATIVE_PAGE_STYLE, render_dashboard
 
-# Весь код внутри этого файла запускается на сервере для отображения streamlit приложения без скачивания zip-архива
+# Server-side script executed by Streamlit runtime for live dashboard preview
 
 API_BASE = os.getenv(
     "STREAMLIT_BUILDER_API_BASE",
@@ -18,9 +19,11 @@ st.set_page_config(
     page_icon="📊",
     layout="wide",
 )
+
+# Apply global dark styling before rendering any elements to prevent layout shifts
 st.markdown(NATIVE_PAGE_STYLE, unsafe_allow_html=True)
 
-# Получение id превью сессии
+# Retrieve preview session ID from URL query parameters
 params = st.query_params
 session_id = params.get("session_id")
 
@@ -28,7 +31,8 @@ if not session_id:
     st.error("No preview session")
     st.stop()
 
-# Получение данных по проекту по id сессии
+
+# Fetch project schema and dataset paths from backend API
 try:
     response = requests.get(
         f"{API_BASE}/preview/{session_id}",
@@ -47,7 +51,23 @@ schema = data["schema"]
 datasets_paths = data.get("datasetsPaths") or {}
 
 
-# Кэширование загруженных источников данных
+def notify_parent_ready():
+    """Notify the parent modal window via postMessage that the dashboard is rendered."""
+    components.html(
+        """
+        <script>
+            try {
+                window.parent.postMessage({ type: 'streamlit:ready' }, '*');
+                window.top.postMessage({ type: 'streamlit:ready' }, '*');
+            } catch (e) {}
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+
+
+# Cache loaded datasets in memory to speed up subsequent filter reruns
 @st.cache_data(show_spinner=False)
 def load_dataset(
         path: str,
@@ -89,5 +109,8 @@ dashboard_title = schema.get("dashboard", {}).get("title") or "Streamlit Dashboa
 st.title(dashboard_title)
 st.caption("Интерактивный дашборд, созданный в Streamlit Builder")
 
-# Вызов функции-генератора всего streamlit кода
+# Generate all dashboard components and grid layout
 render_dashboard(schema, datasets)
+
+# Notify parent modal that all components and charts are loaded
+notify_parent_ready()
