@@ -1,4 +1,5 @@
 import html
+import math
 
 import pandas as pd
 import streamlit as st
@@ -79,9 +80,11 @@ NATIVE_PAGE_STYLE = """
 """
 
 GRID_COLUMNS = 12
+DEFAULT_PAGE_ID = "page-main"
 GRID_ROW_HEIGHT = 20
 GRID_GAP = 16
 CARD_CHROME_HEIGHT = 96
+STREAMLIT_CHROME_HEIGHT = 48
 ALL_VALUES_LABEL = "Все значения"
 SUPPORTED_AGGREGATIONS = {"none", "sum", "mean", "count", "min", "max"}
 SUPPORTED_SORT_ORDERS = {"none", "asc", "desc"}
@@ -161,7 +164,12 @@ def filter_options(component, dataframe):
 
 def selected_filter_value(component, dataframe):
     options = filter_options(component, dataframe)
-    selected = str(st.session_state.get(component_state_key(component), ALL_VALUES_LABEL))
+    state_value = st.session_state.get(component_state_key(component))
+    if component.get("widget", "selectbox") == "multiselect":
+        selected = state_value if isinstance(state_value, list) else []
+        allowed = set(options[1:])
+        return [value for value in selected if value in allowed]
+    selected = str(state_value or ALL_VALUES_LABEL)
     return selected if selected in options else ALL_VALUES_LABEL
 
 
@@ -172,9 +180,16 @@ def resolve_dataset_id(component, datasets):
     return next(iter(datasets), None)
 
 
-def apply_filters(schema, datasets):
+def apply_filters(schema, datasets, page_id=None):
     filtered_datasets = dict(datasets)
-    for component in sorted(schema.get("filters", []), key=lambda item: item.get("order", 0)):
+    filters = schema.get("filters", [])
+    if page_id is not None:
+        filters = [
+            component
+            for component in filters
+            if component.get("pageId", DEFAULT_PAGE_ID) == page_id
+        ]
+    for component in sorted(filters, key=lambda item: item.get("order", 0)):
         dataset_id = resolve_dataset_id(component, datasets)
         if not dataset_id or dataset_id not in filtered_datasets:
             continue
@@ -184,17 +199,70 @@ def apply_filters(schema, datasets):
         if field not in source_df.columns:
             continue
         selected = selected_filter_value(component, source_df)
-        if selected != ALL_VALUES_LABEL:
+        if isinstance(selected, list) and selected:
+            filtered_datasets[dataset_id] = filtered_df[
+                filtered_df[field].astype(str).isin(selected)
+            ]
+        elif selected != ALL_VALUES_LABEL and not isinstance(selected, list):
             filtered_datasets[dataset_id] = filtered_df[filtered_df[field].astype(str) == selected]
     return filtered_datasets
+
+
+def automatic_component_height(component):
+    component_type = component.get("type")
+    padding = max(0, int(component.get("padding", 0))) * 2
+
+    if component_type == "text":
+        font_size = max(8, int(component.get("fontSize", 16)))
+        width = max(
+            2,
+            min(GRID_COLUMNS, int(component.get("layout", {}).get("width", 6))),
+        )
+        characters_per_line = max(18, width * 10)
+        content = str(component.get("content") or "")
+        lines = content.splitlines() or [""]
+        content_lines = sum(
+            max(1, math.ceil(len(line) / characters_per_line))
+            for line in lines
+        )
+        title_lines = 1 if component.get("title") else 0
+        return math.ceil(
+            content_lines * font_size * 1.5
+            + title_lines * 20
+            + padding
+        )
+    if component_type == "page_link":
+        return 40 + padding
+    if component_type == "metric":
+        return 58 + (18 if component.get("description") else 0) + padding
+    if component_type == "selectbox":
+        return (72 if component.get("widget") == "radio" else 56) + padding
+    return int(component.get("layout", {}).get("height", 320))
+
+
+def automatic_container_height(component):
+    surface = component.get(
+        "surface",
+        "none" if component.get("type") in {"text", "page_link"} else "card",
+    )
+    show_border = component.get("showBorder")
+    if show_border is None:
+        show_border = surface == "card"
+    return automatic_component_height(component) + (2 if show_border else 0)
 
 
 def grid_height(component):
     requested = int(component.get("layout", {}).get("height", 320))
     component_type = component.get("type")
+    if (
+        component_type in {"text", "metric", "selectbox", "page_link"}
+        and component.get("heightMode") == "auto"
+    ):
+        height = automatic_component_height(component)
+        return max(1, math.ceil(height / (GRID_ROW_HEIGHT + GRID_GAP)))
     chrome_height = (
         0
-        if component_type in {"text", "metric", "selectbox"}
+        if component_type in {"text", "metric", "selectbox", "page_link"}
         else CARD_CHROME_HEIGHT
     )
     pitch = GRID_ROW_HEIGHT + GRID_GAP
@@ -202,11 +270,41 @@ def grid_height(component):
     return max(1, (total_height + GRID_GAP + pitch - 1) // pitch)
 
 
-def components_from_schema(schema):
+def components_from_schema(schema, page_id=None, parent_id=None):
+    components = [*schema.get("filters", []), *schema.get("views", [])]
+    if page_id is not None:
+        components = [
+            component
+            for component in components
+            if component.get("pageId", DEFAULT_PAGE_ID) == page_id
+        ]
+    components = [
+        component
+        for component in components
+        if component.get("parentId") == parent_id
+    ]
     return sorted(
-        [*schema.get("filters", []), *schema.get("views", [])],
+        components,
         key=lambda item: item.get("order", 0),
     )
+
+
+def all_components_from_schema(schema, page_id=None):
+    components = [*schema.get("filters", []), *schema.get("views", [])]
+    if page_id is not None:
+        components = [
+            component
+            for component in components
+            if component.get("pageId", DEFAULT_PAGE_ID) == page_id
+        ]
+    return sorted(components, key=lambda item: item.get("order", 0))
+
+
+def pages_from_schema(schema):
+    pages = schema.get("pages") or [
+        {"id": DEFAULT_PAGE_ID, "title": "Главная", "order": 1}
+    ]
+    return sorted(pages, key=lambda page: page.get("order", 0))
 
 
 def pack_components(components):
@@ -274,7 +372,7 @@ def card_container_key(component):
     return f"card_{component_state_key(component)}"
 
 
-def dashboard_grid_style(placements):
+def dashboard_grid_style(placements, components=None):
     max_row = max(
         (item["y"] + item["h"] for item in placements),
         default=1,
@@ -291,7 +389,20 @@ def dashboard_grid_style(placements):
         "}",
     ]
     for item in placements:
-        key_class = f"st-key-{card_container_key(item['component'])}"
+        component = item["component"]
+        key_class = f"st-key-{card_container_key(component)}"
+        compact_component = component.get("type") in {
+            "text", "metric", "selectbox", "page_link",
+        }
+        automatic_height = (
+            compact_component
+            and component.get("heightMode", "auto") == "auto"
+        )
+        minimum_height = (
+            automatic_container_height(component)
+            if automatic_height
+            else None
+        )
         item_rules = [
             (
                 ".st-key-dashboard_grid > [data-testid=\"stLayoutWrapper\"]"
@@ -300,10 +411,110 @@ def dashboard_grid_style(placements):
             f"  grid-column: {item['x'] + 1} / span {item['w']};",
             f"  grid-row: {item['y'] + 1} / span {item['h']};",
             "  min-width: 0;",
-            "  height: 100%;",
+            "  height: auto;" if automatic_height else "  height: 100%;",
         ]
+        if automatic_height:
+            item_rules.extend([
+                f"  min-height: {minimum_height}px;",
+                "  align-self: start;",
+                "  overflow: visible;",
+            ])
         item_rules.append("}")
         rules.extend(item_rules)
+
+    styled_components = components or [
+        item["component"] for item in placements
+    ]
+    styled_components = sorted(
+        styled_components,
+        key=lambda component: (
+            component.get("parentId") is not None,
+            component.get("order", 0),
+        ),
+    )
+    for component in styled_components:
+        key_class = f"st-key-{card_container_key(component)}"
+        surface = component.get(
+            "surface",
+            "none" if component.get("type") in {"text", "page_link"} else "card",
+        )
+        show_background = component.get("showBackground")
+        if show_background is None:
+            show_background = surface in {"soft", "card"}
+        if show_background:
+            rules.extend([
+                f".{key_class} {{",
+                "  background: rgba(24, 24, 27, 0.58);",
+                "  border-radius: 0.75rem;",
+                "}",
+            ])
+        compact_component = component.get("type") in {
+            "text", "metric", "selectbox", "page_link",
+        }
+        automatic_height = (
+            compact_component
+            and component.get("heightMode", "auto") == "auto"
+        )
+        if automatic_height:
+            minimum_height = automatic_container_height(component)
+            rules.extend([
+                f".{key_class} {{",
+                "  height: auto !important;",
+                f"  min-height: {minimum_height}px !important;",
+                "  overflow: visible !important;",
+                "  justify-content: flex-start !important;",
+                "}",
+                (
+                    f".{key_class}[data-testid=\"stVerticalBlockBorderWrapper\"], "
+                    f".{key_class} [data-testid=\"stVerticalBlockBorderWrapper\"] {{"
+                ),
+                "  height: auto !important;",
+                "  min-height: 0 !important;",
+                "  overflow: visible !important;",
+                "}",
+                (
+                    f".{key_class} [data-testid=\"stElementContainer\"], "
+                    f".{key_class} [data-testid=\"stMarkdown\"], "
+                    f".{key_class} [data-testid=\"stMarkdown\"] > div {{"
+                ),
+                "  height: auto !important;",
+                "  min-height: 0 !important;",
+                "  overflow: visible !important;",
+                "}",
+            ])
+        component_padding = int(component.get("padding", 12))
+        show_border = component.get("showBorder")
+        if show_border is None:
+            show_border = surface == "card"
+        safe_inline_padding = (
+            max(component_padding, 4)
+            if component.get("type") == "text" and show_border
+            else component_padding
+        )
+        rules.extend([
+            f".{key_class} {{",
+            f"  padding: {component_padding}px;",
+            f"  padding-inline: {safe_inline_padding}px;",
+            "}",
+        ])
+        text_color = component.get("elementTextColor", "#d4d4d8")
+        font_size = component.get("elementFontSize", "auto")
+        font_weight = component.get("elementFontWeight", "normal")
+        font_style = component.get("elementFontStyle", "normal")
+        typography_selectors = (
+            f".{key_class} p, .{key_class} label, .{key_class} button, .{key_class} a, "
+            f".{key_class} [data-testid=\"stMetricValue\"], "
+            f".{key_class} [data-testid=\"stMetricLabel\"]"
+        )
+        rules.extend([
+            f"{typography_selectors} {{",
+            f"  color: {text_color} !important;",
+            f"  font-weight: {font_weight} !important;",
+            f"  font-style: {font_style} !important;",
+        ])
+        if font_size != "auto":
+            rules.append(f"  font-size: {int(font_size)}px !important;")
+        rules.append("}")
     rules.extend([
         "@media (max-width: 760px) {",
         "  .st-key-dashboard_grid {",
@@ -426,14 +637,60 @@ def render_filter(component, dataframe):
         return
     options = filter_options(component, dataframe)
     state_key = component_state_key(component)
-    if st.session_state.get(state_key) not in options:
-        st.session_state[state_key] = ALL_VALUES_LABEL
-    st.selectbox(
-        component.get("title") or "Фильтр",
-        options,
-        key=state_key,
-        help=f"Поле данных: {field}",
+    label = component.get("title") or "Фильтр"
+    help_text = f"Поле данных: {field}"
+    widget = component.get("widget", "selectbox")
+    widget_width = component.get("contentWidth", "stretch")
+
+    if widget == "multiselect":
+        selected = st.session_state.get(state_key)
+        if not isinstance(selected, list):
+            st.session_state[state_key] = []
+        st.multiselect(
+            label,
+            options[1:],
+            key=state_key,
+            help=help_text,
+            width=320 if widget_width == "content" else widget_width,
         )
+    else:
+        if st.session_state.get(state_key) not in options:
+            st.session_state[state_key] = ALL_VALUES_LABEL
+        if widget == "radio":
+            st.radio(
+                label,
+                options,
+                key=state_key,
+                help=help_text,
+                horizontal=True,
+                width=widget_width,
+            )
+        elif widget == "segmented":
+            st.segmented_control(
+                label,
+                options,
+                key=state_key,
+                help=help_text,
+                required=True,
+                width=widget_width,
+            )
+        elif widget == "pills":
+            st.pills(
+                label,
+                options,
+                key=state_key,
+                help=help_text,
+                required=True,
+                width=widget_width,
+            )
+        else:
+            st.selectbox(
+                label,
+                options,
+                key=state_key,
+                help=help_text,
+                width=280 if widget_width == "content" else widget_width,
+            )
 
 
 def render_metric(component, dataframe):
@@ -446,30 +703,14 @@ def render_metric(component, dataframe):
     except (KeyError, ValueError) as error:
         st.warning(str(error))
         return
-    title = html.escape(component.get("title") or "Метрика")
-    formatted_value = html.escape(str(format_metric(value)))
-    description = component.get("description") or ""
-    description_html = (
-        '<div style="margin-top:12px; font-size:14px; color:#a1a1aa;">'
-        f'{html.escape(description)}</div>'
-        if description
-        else ""
-    )
-    card_height = max(60, int(component.get("layout", {}).get("height", 80)))
-    content_height = max(28, card_height - 48)
-    st.markdown(
-        (
-            '<div style="display:flex; flex-direction:column; height:100%;">'
-            f'<div style="font-size:14px; font-weight:650; color:#f8fafc;">{title}</div>'
-            f'<div style="min-height:{content_height}px; display:flex; flex:1; '
-            'flex-direction:column; align-items:center; justify-content:center; '
-            'text-align:center;">'
-            f'<div style="font-size:36px; font-weight:700; line-height:1; color:#f8fafc;">'
-            f'{formatted_value}</div>'
-            f'{description_html}'
-            '</div></div>'
-        ),
-        unsafe_allow_html=True,
+    description = (component.get("description") or "").strip()
+    st.metric(
+        label=component.get("title") or "Метрика",
+        value=format_metric(value),
+        help=description or None,
+        border=False,
+        width=component.get("contentWidth", "stretch"),
+        height="content",
     )
 
 
@@ -478,6 +719,17 @@ def render_text(component):
     content = component.get("content") or ""
     if title:
         st.markdown(f"**{title}**")
+    uses_default_style = (
+        int(component.get("fontSize", 16)) == 16
+        and component.get("fontWeight", "normal") == "normal"
+        and component.get("fontStyle", "normal") == "normal"
+        and component.get("color", "#d4d4d8").lower() == "#d4d4d8"
+        and component.get("textAlign", "left") == "left"
+    )
+    if uses_default_style:
+        st.markdown(content)
+        return
+
     safe_content = html.escape(content).replace("\n", "<br>")
     style = "; ".join([
         f"font-size: {component.get('fontSize', 16)}px",
@@ -492,6 +744,45 @@ def render_text(component):
     st.markdown(
         f'<div style="{style}">{safe_content}</div>',
         unsafe_allow_html=True,
+    )
+
+
+def render_page_link(component, navigation_pages):
+    target_page = navigation_pages.get(component.get("targetPageId"))
+    if target_page is None:
+        st.warning("Страница для перехода не найдена.")
+        return
+
+    label = component.get("title") or "Открыть страницу"
+    if component.get("displayStyle", "button") == "link":
+        st.page_link(
+            target_page,
+            label=label,
+            width=component.get("contentWidth", "content"),
+        )
+    elif st.button(
+        label,
+        key=f"navigate_{component_state_key(component)}",
+        type="primary",
+        width=component.get("contentWidth", "content"),
+    ):
+        st.switch_page(target_page)
+
+
+def render_table(component, dataframe, available_height):
+    requested_columns = component.get("columns") or []
+    columns = [
+        column for column in requested_columns
+        if column in dataframe.columns
+    ] or list(dataframe.columns)
+    table_data = dataframe.loc[:, columns].head(
+        int(component.get("rowLimit", 50))
+    )
+    st.dataframe(
+        table_data,
+        width=component.get("contentWidth", "stretch"),
+        height=max(140, available_height),
+        hide_index=component.get("hideIndex", True),
     )
 
 
@@ -513,8 +804,10 @@ def render_chart(view, dataframe, available_height):
         else None
     )
     x_axis = {
-        "labelColor": "#94a3b8",
-        "titleColor": "#94a3b8",
+        "labelColor": view.get("axisLabelColor", "#94a3b8"),
+        "labelFontSize": int(view.get("axisLabelFontSize", 11)),
+        "titleColor": view.get("axisTitleColor", "#94a3b8"),
+        "titleFontSize": int(view.get("axisTitleFontSize", 12)),
         "grid": False,
         "labelOverlap": "greedy",
         "labelLimit": 110,
@@ -542,8 +835,10 @@ def render_chart(view, dataframe, available_height):
             "type": "quantitative",
             "title": view.get("y"),
             "axis": {
-                "labelColor": "#94a3b8",
-                "titleColor": "#94a3b8",
+                "labelColor": view.get("axisLabelColor", "#94a3b8"),
+                "labelFontSize": int(view.get("axisLabelFontSize", 11)),
+                "titleColor": view.get("axisTitleColor", "#94a3b8"),
+                "titleFontSize": int(view.get("axisTitleFontSize", 12)),
                 "gridColor": "#1f2937",
                 "gridOpacity": .75,
             },
@@ -562,6 +857,17 @@ def render_chart(view, dataframe, available_height):
 
     spec = {
         "height": max(120, available_height),
+        "autosize": {
+            "type": "fit",
+            "contains": "padding",
+            "resize": True,
+        },
+        "padding": {
+            "top": 4,
+            "right": 4,
+            "bottom": 4,
+            "left": 4,
+        },
         "config": {
             "background": "transparent",
             "view": {"stroke": None},
@@ -657,18 +963,39 @@ def render_component(
         source_dataframe,
         filtered_dataframe,
         container_height=None,
+        navigation_pages=None,
+        grouped=False,
 ):
     component_type = component.get("type")
+    surface = component.get(
+        "surface",
+        "none" if component_type in {"text", "page_link"} else "card",
+    )
+    show_border = component.get("showBorder")
+    if show_border is None:
+        show_border = surface == "card"
+    horizontal_alignment = component.get("contentAlignment", "left")
+    vertical_alignment = component.get("verticalAlignment", "top")
     requested_height = int(component.get("layout", {}).get("height", 320))
-    if component_type in {"text", "metric", "selectbox"}:
+    compact_component = component_type in {"text", "metric", "selectbox", "page_link"}
+    height_mode = component.get("heightMode") or (
+        "auto" if compact_component else "fixed"
+    )
+    is_content_sized = (
+        compact_component
+        and (grouped or height_mode == "auto")
+    )
+    if compact_component:
         content_height = max(60, requested_height)
     else:
         outer_height = container_height or requested_height + CARD_CHROME_HEIGHT
-        content_height = max(140, outer_height - CARD_CHROME_HEIGHT)
+        content_height = max(140, outer_height - STREAMLIT_CHROME_HEIGHT)
     with st.container(
-            height=container_height or content_height,
-            border=True,
+            height="content" if is_content_sized else (container_height or content_height),
+            border=show_border,
             key=card_container_key(component),
+            horizontal_alignment=horizontal_alignment,
+            vertical_alignment=vertical_alignment,
     ):
         if component_type == "selectbox":
             render_filter(component, source_dataframe)
@@ -676,26 +1003,154 @@ def render_component(
             render_metric(component, filtered_dataframe)
         elif component_type == "text":
             render_text(component)
+        elif component_type == "page_link":
+            render_page_link(component, navigation_pages or {})
+        elif component_type == "table":
+            st.markdown(f"**{component.get('title') or 'Таблица'}**")
+            render_table(component, filtered_dataframe, content_height)
         else:
             st.markdown(f"**{component.get('title') or 'График'}**")
             render_chart(component, filtered_dataframe, content_height)
 
 
+def render_layout_group(
+        component,
+        schema,
+        datasets,
+        filtered_datasets,
+        container_height,
+        navigation_pages,
+):
+    surface = component.get("surface", "none")
+    show_border = component.get("showBorder")
+    if show_border is None:
+        show_border = surface == "card"
+    gap = int(component.get("gap", 8))
+    gap_value = None if gap == 0 else gap
+    children = components_from_schema(
+        schema,
+        component.get("pageId", DEFAULT_PAGE_ID),
+        component.get("id"),
+    )
+    compact_types = {"text", "metric", "selectbox", "page_link"}
+    group_height = (
+        "content"
+        if children and all(child.get("type") in compact_types for child in children)
+        else container_height
+    )
+    with st.container(
+            height=group_height,
+            border=show_border,
+            key=card_container_key(component),
+    ):
+        title = component.get("title", "").strip()
+        if title:
+            st.markdown(f"**{title}**")
+        with st.container(
+                horizontal=component.get("direction", "vertical") == "horizontal",
+                wrap=component.get("wrap", True),
+                horizontal_alignment=component.get("horizontalAlignment", "left"),
+                vertical_alignment=component.get("verticalAlignment", "top"),
+                gap=gap_value,
+        ):
+            for child in children:
+                if child.get("type") in {"text", "page_link"}:
+                    render_component(
+                        child,
+                        None,
+                        None,
+                        None,
+                        navigation_pages,
+                        grouped=True,
+                    )
+                    continue
+                dataset_id = resolve_dataset_id(child, datasets)
+                render_component(
+                    child,
+                    datasets[dataset_id],
+                    filtered_datasets[dataset_id],
+                    None,
+                    navigation_pages,
+                    grouped=True,
+                )
+
+
 # Точка входа которая генерирует весь streamlit код
-def render_dashboard(schema, datasets):
-    placements = pack_components(components_from_schema(schema))
+def render_dashboard(schema, datasets, page_id=None, navigation_pages=None):
+    placements = pack_components(components_from_schema(schema, page_id))
     if not placements or not datasets:
         return
     st.markdown(NATIVE_PAGE_STYLE, unsafe_allow_html=True)
-    st.markdown(dashboard_grid_style(placements), unsafe_allow_html=True)
-    filtered_datasets = apply_filters(schema, datasets)
+    st.markdown(
+        dashboard_grid_style(
+            placements,
+            all_components_from_schema(schema, page_id),
+        ),
+        unsafe_allow_html=True,
+    )
+    filtered_datasets = apply_filters(schema, datasets, page_id)
     with st.container(key="dashboard_grid"):
         for item in sorted(placements, key=lambda value: (value["y"], value["x"])):
             component = item["component"]
+            if component.get("type") == "layout_group":
+                render_layout_group(
+                    component,
+                    schema,
+                    datasets,
+                    filtered_datasets,
+                    grid_pixel_height(item["h"]),
+                    navigation_pages,
+                )
+                continue
+            if component.get("type") == "page_link":
+                render_component(
+                    component,
+                    None,
+                    None,
+                    grid_pixel_height(item["h"]),
+                    navigation_pages,
+                )
+                continue
             dataset_id = resolve_dataset_id(component, datasets)
             render_component(
                 component,
                 datasets[dataset_id],
                 filtered_datasets[dataset_id],
                 grid_pixel_height(item["h"]),
+                navigation_pages,
             )
+
+
+def render_multipage_dashboard(schema, datasets):
+    pages = pages_from_schema(schema)
+    has_page_links = any(
+        view.get("type") == "page_link"
+        for view in schema.get("views", [])
+    )
+    if len(pages) == 1 and not has_page_links:
+        render_dashboard(schema, datasets, pages[0]["id"])
+        return
+
+    navigation_pages = {}
+    for index, page in enumerate(pages):
+        page_id = page["id"]
+
+        def render_page(current_page_id=page_id):
+            render_dashboard(
+                schema,
+                datasets,
+                current_page_id,
+                navigation_pages,
+            )
+
+        navigation_pages[page_id] = st.Page(
+            render_page,
+            title=page["title"],
+            url_path=page_id,
+            default=index == 0,
+        )
+
+    st.navigation(
+        list(navigation_pages.values()),
+        position="top" if len(pages) > 1 else "hidden",
+    ).run()

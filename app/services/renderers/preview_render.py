@@ -5,7 +5,7 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
-from render_core import NATIVE_PAGE_STYLE, render_dashboard
+from render_core import NATIVE_PAGE_STYLE, render_multipage_dashboard
 
 # Server-side script executed by Streamlit runtime for live dashboard preview
 
@@ -109,8 +109,8 @@ dashboard_title = schema.get("dashboard", {}).get("title") or "Streamlit Dashboa
 st.title(dashboard_title)
 st.caption("Интерактивный дашборд, созданный в Streamlit Builder")
 
-# Generate all dashboard components and grid layout
-render_dashboard(schema, datasets)
+# Generate all dashboard pages, components, and grid layout
+render_multipage_dashboard(schema, datasets)
 
 # Notify parent modal that all components and charts are loaded
 notify_parent_ready()
