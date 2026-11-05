@@ -19,7 +19,10 @@ NATIVE_PAGE_STYLE = """
   }
   .block-container {
     width: 100%;
-    max-width: 1540px;
+    /* 1040px minus page padding gives the same 960px working width as the
+       editor canvas. Grid columns, wrapping and component heights therefore
+       stay truthful between the builder and the generated application. */
+    max-width: 1040px;
     padding: 2rem 2.5rem 3rem;
   }
   .block-container h1 {
@@ -51,9 +54,17 @@ NATIVE_PAGE_STYLE = """
   }
   [data-testid="stMetricValue"] {
     color: #f8fafc;
-    font-size: clamp(1.8rem, 3vw, 2.65rem);
+    font-size: clamp(1.35rem, 2vw, 2rem);
     font-weight: 760;
     letter-spacing: -.04em;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    white-space: nowrap !important;
+  }
+  [data-testid="stMetricValue"] > div {
+    overflow: visible !important;
+    text-overflow: clip !important;
+    white-space: nowrap !important;
   }
   [data-testid="stSelectbox"] label {
     color: #cbd5e1;
@@ -82,7 +93,10 @@ NATIVE_PAGE_STYLE = """
 GRID_COLUMNS = 12
 DEFAULT_PAGE_ID = "page-main"
 GRID_ROW_HEIGHT = 20
-GRID_GAP = 16
+# Keep the generated Streamlit layout visually identical to the editor canvas.
+# Horizontal and vertical neighbours use the same minimum 8 px gap.
+GRID_COLUMN_GAP = 8
+GRID_ROW_GAP = 8
 CARD_CHROME_HEIGHT = 96
 STREAMLIT_CHROME_HEIGHT = 48
 ALL_VALUES_LABEL = "Все значения"
@@ -218,25 +232,32 @@ def automatic_component_height(component):
             2,
             min(GRID_COLUMNS, int(component.get("layout", {}).get("width", 6))),
         )
-        characters_per_line = max(18, width * 10)
+        available_width = max(64, width * 96 - padding)
         content = str(component.get("content") or "")
         lines = content.splitlines() or [""]
         content_lines = sum(
-            max(1, math.ceil(len(line) / characters_per_line))
+            max(
+                1,
+                math.ceil(len(line) * font_size * 0.58 / available_width),
+            )
             for line in lines
         )
         title_lines = 1 if component.get("title") else 0
+        line_height = max(24, font_size * 1.5)
         return math.ceil(
-            content_lines * font_size * 1.5
+            content_lines * line_height
             + title_lines * 20
             + padding
         )
     if component_type == "page_link":
         return 40 + padding
     if component_type == "metric":
+        # st.metric has its own label/value spacing in addition to our card
+        # padding. Reserve the complete widget height so the following grid
+        # item cannot start inside the metric card.
         return 58 + (18 if component.get("description") else 0) + padding
     if component_type == "selectbox":
-        return (72 if component.get("widget") == "radio" else 56) + padding
+        return 56 + padding
     return int(component.get("layout", {}).get("height", 320))
 
 
@@ -254,20 +275,30 @@ def automatic_container_height(component):
 def grid_height(component):
     requested = int(component.get("layout", {}).get("height", 320))
     component_type = component.get("type")
-    if (
-        component_type in {"text", "metric", "selectbox", "page_link"}
-        and component.get("heightMode") == "auto"
-    ):
+    if component_type in {"text", "metric", "selectbox", "page_link"}:
         height = automatic_component_height(component)
-        return max(1, math.ceil(height / (GRID_ROW_HEIGHT + GRID_GAP)))
+        automatic_rows = max(
+            1,
+            math.ceil(
+                (height + GRID_ROW_GAP)
+                / (GRID_ROW_HEIGHT + GRID_ROW_GAP)
+            ),
+        )
+        if component_type == "text" or component.get("heightMode") == "auto":
+            return automatic_rows
+        pitch = GRID_ROW_HEIGHT + GRID_ROW_GAP
+        requested_rows = max(1, (requested + GRID_ROW_GAP + pitch - 1) // pitch)
+        # Text may not be clipped below its wrapped lines. Other compact
+        # widgets intentionally support a smaller manual card height.
+        return requested_rows
     chrome_height = (
         0
         if component_type in {"text", "metric", "selectbox", "page_link"}
         else CARD_CHROME_HEIGHT
     )
-    pitch = GRID_ROW_HEIGHT + GRID_GAP
+    pitch = GRID_ROW_HEIGHT + GRID_ROW_GAP
     total_height = requested + chrome_height
-    return max(1, (total_height + GRID_GAP + pitch - 1) // pitch)
+    return max(1, (total_height + GRID_ROW_GAP + pitch - 1) // pitch)
 
 
 def components_from_schema(schema, page_id=None, parent_id=None):
@@ -333,13 +364,19 @@ def pack_components(components):
         width = max(1, min(GRID_COLUMNS, int(layout.get("width", 6))))
         source_x = max(0, min(GRID_COLUMNS - width, int(layout.get("x", 0))))
         source_y = max(0, int(layout.get("y", 0)))
-        placed.append({
+        candidate = {
             "x": source_x,
             "y": source_y,
             "w": width,
             "h": grid_height(component),
             "component": component,
-        })
+        }
+        while True:
+            collisions = [current for current in placed if overlaps(candidate, current)]
+            if not collisions:
+                break
+            candidate["y"] = max(current["y"] + current["h"] for current in collisions)
+        placed.append(candidate)
 
     for component in automatic:
         width = max(1, min(GRID_COLUMNS, int(component.get("layout", {}).get("width", 6))))
@@ -364,7 +401,7 @@ def pack_components(components):
 def grid_pixel_height(grid_rows):
     return (
             max(1, int(grid_rows)) * GRID_ROW_HEIGHT
-            + max(0, int(grid_rows) - 1) * GRID_GAP
+            + max(0, int(grid_rows) - 1) * GRID_ROW_GAP
     )
 
 
@@ -383,9 +420,17 @@ def dashboard_grid_style(placements, components=None):
         "  display: grid !important;",
         f"  grid-template-columns: repeat({GRID_COLUMNS}, minmax(0, 1fr));",
         f"  grid-template-rows: repeat({max_row}, {GRID_ROW_HEIGHT}px);",
-        f"  column-gap: {GRID_GAP}px !important;",
-        f"  row-gap: {GRID_GAP}px !important;",
+        f"  column-gap: {GRID_COLUMN_GAP}px !important;",
+        f"  row-gap: {GRID_ROW_GAP}px !important;",
+        f"  gap: {GRID_ROW_GAP}px {GRID_COLUMN_GAP}px !important;",
         "  align-items: stretch;",
+        "}",
+        # Streamlit wraps every keyed container in a layout wrapper. Its
+        # default block spacing used to be added on top of our grid gap,
+        # making vertical neighbours farther apart than horizontal ones.
+        ".st-key-dashboard_grid > [data-testid=\"stLayoutWrapper\"] {",
+        "  margin: 0 !important;",
+        "  padding-block: 0 !important;",
         "}",
     ]
     for item in placements:
@@ -411,6 +456,8 @@ def dashboard_grid_style(placements, components=None):
             f"  grid-column: {item['x'] + 1} / span {item['w']};",
             f"  grid-row: {item['y'] + 1} / span {item['h']};",
             "  min-width: 0;",
+            "  box-sizing: border-box;",
+            f"  padding: {int(component.get('spacing', 0))}px;",
             "  height: auto;" if automatic_height else "  height: 100%;",
         ]
         if automatic_height:
@@ -464,6 +511,9 @@ def dashboard_grid_style(placements, components=None):
                 "  overflow: visible !important;",
                 "  justify-content: flex-start !important;",
                 "}",
+                f".{key_class} > [data-testid=\"stVerticalBlock\"] {{",
+                "  gap: 0 !important;",
+                "}",
                 (
                     f".{key_class}[data-testid=\"stVerticalBlockBorderWrapper\"], "
                     f".{key_class} [data-testid=\"stVerticalBlockBorderWrapper\"] {{"
@@ -515,12 +565,30 @@ def dashboard_grid_style(placements, components=None):
         if font_size != "auto":
             rules.append(f"  font-size: {int(font_size)}px !important;")
         rules.append("}")
+        if component.get("type") == "metric":
+            rules.extend([
+                f".{key_class} [data-testid=\"stMetricValue\"],",
+                f".{key_class} [data-testid=\"stMetricValue\"] > div {{",
+                "  overflow: visible !important;",
+                "  text-overflow: clip !important;",
+                "  white-space: nowrap !important;",
+                "}",
+            ])
+        if component.get("type") == "page_link" and component.get("displayStyle", "button") == "button":
+            button_color = component.get("buttonColor", "#f47721")
+            rules.extend([
+                f".{key_class} [data-testid=\"stButton\"] button {{",
+                f"  background: {button_color} !important;",
+                f"  border-color: {button_color} !important;",
+                "  color: #ffffff !important;",
+                "}",
+            ])
     rules.extend([
         "@media (max-width: 760px) {",
         "  .st-key-dashboard_grid {",
         "    display: flex !important;",
         "    flex-direction: column;",
-        f"    gap: {GRID_GAP}px !important;",
+        f"    gap: {GRID_ROW_GAP}px !important;",
         "  }",
         "  .st-key-dashboard_grid > [data-testid=\"stLayoutWrapper\"] {",
         "    width: 100%;",
@@ -770,17 +838,35 @@ def render_page_link(component, navigation_pages):
 
 
 def render_table(component, dataframe, available_height):
-    requested_columns = component.get("columns") or []
-    columns = [
-        column for column in requested_columns
-        if column in dataframe.columns
-    ] or list(dataframe.columns)
-    table_data = dataframe.loc[:, columns].head(
-        int(component.get("rowLimit", 50))
-    )
+    if component.get("tableMode", "data") == "pivot":
+        index_field = component.get("pivotIndex")
+        value_field = component.get("pivotValue")
+        aggregation = component.get("pivotAggregation", "sum")
+        if index_field not in dataframe.columns or value_field not in dataframe.columns:
+            st.warning("Выберите поля для сводной таблицы.")
+            return
+        if aggregation == "count":
+            table_data = dataframe.groupby(index_field, dropna=False).size().reset_index(name=value_field)
+        else:
+            pivot_source = dataframe[[index_field, value_field]].copy()
+            pivot_source[value_field] = pd.to_numeric(pivot_source[value_field], errors="coerce")
+            table_data = (
+                pivot_source.dropna(subset=[value_field])
+                .groupby(index_field, dropna=False, as_index=False)[value_field]
+                .agg(aggregation)
+            )
+    else:
+        requested_columns = component.get("columns") or []
+        columns = [
+            column for column in requested_columns
+            if column in dataframe.columns
+        ] or list(dataframe.columns)
+        table_data = dataframe.loc[:, columns]
+    if component.get("rowMode", "limit") == "limit":
+        table_data = table_data.head(int(component.get("rowLimit", 50)))
     st.dataframe(
         table_data,
-        width=component.get("contentWidth", "stretch"),
+        width="stretch",
         height=max(140, available_height),
         hide_index=component.get("hideIndex", True),
     )
@@ -983,7 +1069,13 @@ def render_component(
     )
     is_content_sized = (
         compact_component
-        and (grouped or height_mode == "auto")
+        and (
+            grouped
+            or (
+                component_type in {"text", "page_link"}
+                and height_mode == "auto"
+            )
+        )
     )
     if compact_component:
         content_height = max(60, requested_height)

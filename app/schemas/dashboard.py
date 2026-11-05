@@ -12,7 +12,9 @@ DEFAULT_PAGE_ID = "page-main"
 
 class Layout(BaseModel):
     width: int = Field(default=6, ge=1, le=12)
-    height: int = Field(default=320, ge=60, le=720)
+    # Compact text can be one 40-48px row. Type-specific validation below
+    # still keeps charts, tables and containers at their larger minimums.
+    height: int = Field(default=320, ge=40, le=720)
     x: int | None = Field(default=None, ge=0, le=11)
     y: int | None = Field(default=None, ge=0)
 
@@ -74,6 +76,7 @@ class ComponentBase(BaseModel):
         alias="verticalAlignment",
     )
     padding: int = Field(default=12, ge=0, le=32)
+    spacing: int = Field(default=0, ge=0, le=16)
     content_width: Literal["content", "stretch"] = Field(
         default="stretch",
         alias="contentWidth",
@@ -82,7 +85,7 @@ class ComponentBase(BaseModel):
         default=None,
         alias="heightMode",
     )
-    element_font_size: Literal["auto", "12", "14", "16", "18", "20", "24", "28", "32"] = Field(
+    element_font_size: str | int = Field(
         default="auto",
         alias="elementFontSize",
     )
@@ -102,6 +105,19 @@ class ComponentBase(BaseModel):
     order: int = Field(ge=1)
     layout: Layout = Field(default_factory=Layout)
     title: str = ""
+
+    @field_validator("element_font_size")
+    @classmethod
+    def validate_element_font_size(cls, value):
+        if value == "auto":
+            return value
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError("Unsupported element font size") from error
+        if numeric not in {12, 14, 16, 18, 20, 24, 28, 32}:
+            raise ValueError("Unsupported element font size")
+        return numeric
 
 
 class SelectboxFilter(ComponentBase):
@@ -196,13 +212,32 @@ class PageLinkView(ComponentBase):
         default="button",
         alias="displayStyle",
     )
+    button_color: str = Field(
+        default="#f47721",
+        alias="buttonColor",
+        pattern=r"^#[0-9a-fA-F]{6}$",
+    )
 
 
 class TableView(ComponentBase):
     type: Literal["table"]
     columns: list[str] = Field(default_factory=list)
-    row_limit: int = Field(default=50, alias="rowLimit", ge=1, le=500)
+    table_mode: Literal["data", "pivot"] = Field(default="data", alias="tableMode")
+    row_mode: Literal["all", "limit"] = Field(default="limit", alias="rowMode")
+    row_limit: int = Field(default=50, alias="rowLimit", ge=1, le=10000)
     hide_index: bool = Field(default=True, alias="hideIndex")
+    pivot_index: str = Field(default="", alias="pivotIndex")
+    pivot_value: str = Field(default="", alias="pivotValue")
+    pivot_aggregation: Literal["sum", "mean", "count", "min", "max"] = Field(
+        default="sum",
+        alias="pivotAggregation",
+    )
+
+    @model_validator(mode="after")
+    def pivot_fields_are_required(self):
+        if self.table_mode == "pivot" and (not self.pivot_index or not self.pivot_value):
+            raise ValueError("Pivot tables require both grouping and value fields")
+        return self
 
 
 class LayoutGroupView(ComponentBase):

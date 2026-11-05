@@ -245,7 +245,7 @@ def get_dataset_path(user_id: str, dataset_id: str) -> Path | None:
 def get_dataset_preview(
         user_id: str,
         dataset_id: str,
-        limit: int = 500,
+        limit: int = 10000,
 ) -> dict | None:
 
     path = get_dataset_path(user_id, dataset_id)
@@ -255,7 +255,7 @@ def get_dataset_preview(
     meta = get_dataset_meta(user_id, dataset_id) or {}
     file_format = meta.get("format")
 
-    safe_limit = min(limit, 1000)
+    safe_limit = min(limit, 10000)
     try:
         if file_format == "excel":
             sheet_name = meta.get("sheetName")

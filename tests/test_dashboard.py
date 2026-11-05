@@ -159,6 +159,37 @@ class DashboardSchemaTests(unittest.TestCase):
         self.assertEqual(validated["views"][-2]["columns"], ["region", "sales"])
         self.assertEqual(validated["views"][-1]["targetPageId"], "page-details")
 
+    def test_validates_pivot_table_and_page_button_color(self):
+        schema = make_schema()
+        schema["pages"] = [
+            {"id": "page-main", "title": "Main", "order": 1},
+            {"id": "page-details", "title": "Details", "order": 2},
+        ]
+        schema["views"].extend([
+            {
+                "id": "pivot-1", "type": "table", "pageId": "page-main",
+                "datasetId": "dataset-1", "order": 4,
+                "layout": {"width": 6, "height": 320},
+                "tableMode": "pivot", "rowMode": "all",
+                "pivotIndex": "region", "pivotValue": "sales",
+                "pivotAggregation": "mean",
+            },
+            {
+                "id": "link-1", "type": "page_link", "pageId": "page-main",
+                "datasetId": None, "order": 5,
+                "layout": {"width": 2, "height": 60},
+                "targetPageId": "page-details", "buttonColor": "#2563eb",
+                "elementFontSize": 12,
+            },
+        ])
+
+        validated = validate_dashboard_schema(schema)
+
+        self.assertEqual(validated["views"][-2]["pivotAggregation"], "mean")
+        self.assertEqual(validated["views"][-2]["rowMode"], "all")
+        self.assertEqual(validated["views"][-1]["buttonColor"], "#2563eb")
+        self.assertEqual(validated["views"][-1]["elementFontSize"], 12)
+
     def test_rejects_navigation_to_unknown_target_page(self):
         schema = make_schema()
         schema["views"].append({
@@ -786,7 +817,8 @@ class GeneratorTests(unittest.TestCase):
         namespace = {
             "GRID_COLUMNS": 12,
             "GRID_ROW_HEIGHT": 20,
-            "GRID_GAP": 16,
+            "GRID_COLUMN_GAP": 16,
+            "GRID_ROW_GAP": 8,
             "CARD_CHROME_HEIGHT": 96,
         }
         exec(
@@ -813,7 +845,7 @@ class GeneratorTests(unittest.TestCase):
             [
                 ("metric", 1, 2),
                 ("chart-1", 4, 2),
-                ("chart-2", 0, 13),
+                ("chart-2", 0, 16),
             ],
         )
 
@@ -875,7 +907,8 @@ class GeneratorTests(unittest.TestCase):
         namespace = {
             "GRID_COLUMNS": 12,
             "GRID_ROW_HEIGHT": 20,
-            "GRID_GAP": 16,
+            "GRID_COLUMN_GAP": 16,
+            "GRID_ROW_GAP": 8,
             "CARD_CHROME_HEIGHT": 96,
         }
         exec(
@@ -901,16 +934,16 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual(
             [(item["x"], item["y"], item["w"], item["h"]) for item in placements],
             [
-                (0, 0, 3, 7),
-                (3, 0, 3, 7),
-                (6, 0, 6, 14),
-                (0, 7, 6, 11),
-                (6, 14, 6, 17),
-                (0, 18, 6, 13),
+                (0, 0, 3, 9),
+                (3, 0, 3, 9),
+                (6, 0, 6, 18),
+                (0, 9, 6, 14),
+                (6, 18, 6, 22),
+                (0, 23, 6, 17),
             ],
         )
         self.assertIn("grid-column: 7 / span 6;", style)
-        self.assertIn("grid-row: 15 / span 17;", style)
+        self.assertIn("grid-row: 19 / span 22;", style)
         for component in components:
             safe_id = component["id"].replace("-", "_")
             self.assertIn(f"st-key-card_builder_filter_{safe_id}", style)
@@ -930,7 +963,8 @@ class GeneratorTests(unittest.TestCase):
         namespace = {
             "GRID_COLUMNS": 12,
             "GRID_ROW_HEIGHT": 20,
-            "GRID_GAP": 16,
+            "GRID_COLUMN_GAP": 16,
+            "GRID_ROW_GAP": 8,
         }
         exec(
             compile(
@@ -1209,6 +1243,35 @@ class RuntimeRendererTests(unittest.TestCase):
         self.assertEqual(len(rendered), 2)
         self.assertEqual(dataframe_mock.call_args.kwargs["height"], 220)
 
+    def test_table_renderer_can_show_all_rows(self):
+        component = {"columns": ["region"], "rowMode": "all", "rowLimit": 1}
+        dataframe = pd.DataFrame({"region": ["A", "B", "C"]})
+
+        with patch.object(render_core.st, "dataframe") as dataframe_mock:
+            render_core.render_table(component, dataframe, 220)
+
+        self.assertEqual(len(dataframe_mock.call_args.args[0]), 3)
+
+    def test_table_renderer_builds_pivot_table(self):
+        component = {
+            "tableMode": "pivot", "rowMode": "all",
+            "pivotIndex": "region", "pivotValue": "sales",
+            "pivotAggregation": "sum",
+        }
+        dataframe = pd.DataFrame({
+            "region": ["A", "A", "B"],
+            "sales": [10, 15, 20],
+        })
+
+        with patch.object(render_core.st, "dataframe") as dataframe_mock:
+            render_core.render_table(component, dataframe, 220)
+
+        rendered = dataframe_mock.call_args.args[0]
+        self.assertEqual(rendered.to_dict("records"), [
+            {"region": "A", "sales": 25},
+            {"region": "B", "sales": 20},
+        ])
+
     def test_multiselect_filter_accepts_multiple_values(self):
         schema = {
             "filters": [{
@@ -1276,9 +1339,9 @@ class RuntimeRendererTests(unittest.TestCase):
         text = {"type": "text", "layout": {"height": 60}}
         selectbox = {"type": "selectbox", "layout": {"height": 80}}
 
-        self.assertEqual(render_core.grid_height(metric), 5)
-        self.assertEqual(render_core.grid_height(text), 3)
-        self.assertEqual(render_core.grid_height(selectbox), 3)
+        self.assertEqual(render_core.grid_height(metric), 6)
+        self.assertEqual(render_core.grid_height(text), 2)
+        self.assertEqual(render_core.grid_height(selectbox), 4)
 
     def test_renderer_keeps_editor_grid_coordinates(self):
         components = [
@@ -1290,10 +1353,10 @@ class RuntimeRendererTests(unittest.TestCase):
 
         metric, bar, line, text = render_core.pack_components(components)
 
-        self.assertEqual((metric["y"], metric["h"]), (0, 5))
-        self.assertEqual((bar["y"], bar["h"]), (7, 10))
-        self.assertEqual((line["y"], line["h"]), (0, 12))
-        self.assertEqual((text["y"], text["h"]), (12, 3))
+        self.assertEqual((metric["y"], metric["h"]), (0, 6))
+        self.assertEqual((bar["y"], bar["h"]), (7, 13))
+        self.assertEqual((line["y"], line["h"]), (0, 16))
+        self.assertEqual((text["y"], text["h"]), (16, 2))
 
     def test_text_renderer_applies_style_and_escapes_html(self):
         component = {

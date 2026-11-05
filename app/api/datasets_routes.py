@@ -54,7 +54,7 @@ async def get_dataset_preview(
             auth_service.User,
             Depends(auth_service.get_current_active_user),
         ],
-        limit: int = Query(default=500, ge=1, le=1000),
+        limit: int = Query(default=10000, ge=1, le=10000),
 ):
     try:
         preview = dataset_service.get_dataset_preview(
