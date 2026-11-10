@@ -23,9 +23,17 @@ st.set_page_config(
 # Apply global dark styling before rendering any elements to prevent layout shifts
 st.markdown(NATIVE_PAGE_STYLE, unsafe_allow_html=True)
 
-# Retrieve preview session ID from URL query parameters
+# The query string is present on the initial preview URL, but Streamlit removes
+# it when st.navigation changes the page path. Persist the ID in Session State
+# so every page in the same preview keeps using the original backend session.
 params = st.query_params
-session_id = params.get("session_id")
+query_session_id = params.get("session_id")
+if query_session_id:
+    st.session_state["_builder_preview_session_id"] = query_session_id
+
+session_id = query_session_id or st.session_state.get(
+    "_builder_preview_session_id"
+)
 
 if not session_id:
     st.error("No preview session")
