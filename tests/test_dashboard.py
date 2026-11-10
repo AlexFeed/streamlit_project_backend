@@ -1241,7 +1241,7 @@ class RuntimeRendererTests(unittest.TestCase):
         rendered = dataframe_mock.call_args.args[0]
         self.assertEqual(list(rendered.columns), ["region", "sales"])
         self.assertEqual(len(rendered), 2)
-        self.assertEqual(dataframe_mock.call_args.kwargs["height"], 220)
+        self.assertEqual(dataframe_mock.call_args.kwargs["height"], "content")
 
     def test_table_renderer_can_show_all_rows(self):
         component = {"columns": ["region"], "rowMode": "all", "rowLimit": 1}

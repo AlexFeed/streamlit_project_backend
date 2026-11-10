@@ -98,7 +98,9 @@ GRID_ROW_HEIGHT = 20
 GRID_COLUMN_GAP = 8
 GRID_ROW_GAP = 8
 CARD_CHROME_HEIGHT = 96
-STREAMLIT_CHROME_HEIGHT = 48
+# Space used by the component title, Streamlit block gap and card padding.
+# It must not be handed to the chart itself or the fixed card starts scrolling.
+STREAMLIT_CHROME_HEIGHT = 76
 ALL_VALUES_LABEL = "Все значения"
 SUPPORTED_AGGREGATIONS = {"none", "sum", "mean", "count", "min", "max"}
 SUPPORTED_SORT_ORDERS = {"none", "asc", "desc"}
@@ -545,6 +547,10 @@ def dashboard_grid_style(placements, components=None):
             f".{key_class} {{",
             f"  padding: {component_padding}px;",
             f"  padding-inline: {safe_inline_padding}px;",
+            "  overflow-y: hidden !important;",
+            "}",
+            f".{key_class} > [data-testid=\"stVerticalBlock\"] {{",
+            "  overflow-y: hidden !important;",
             "}",
         ])
         text_color = component.get("elementTextColor", "#d4d4d8")
@@ -705,8 +711,9 @@ def render_filter(component, dataframe):
         return
     options = filter_options(component, dataframe)
     state_key = component_state_key(component)
-    label = component.get("title") or "Фильтр"
-    help_text = f"Поле данных: {field}"
+    title = (component.get("title") or "").strip()
+    label = title or field
+    label_visibility = "visible" if title else "collapsed"
     widget = component.get("widget", "selectbox")
     widget_width = component.get("contentWidth", "stretch")
 
@@ -718,7 +725,7 @@ def render_filter(component, dataframe):
             label,
             options[1:],
             key=state_key,
-            help=help_text,
+            label_visibility=label_visibility,
             width=320 if widget_width == "content" else widget_width,
         )
     else:
@@ -729,7 +736,7 @@ def render_filter(component, dataframe):
                 label,
                 options,
                 key=state_key,
-                help=help_text,
+                label_visibility=label_visibility,
                 horizontal=True,
                 width=widget_width,
             )
@@ -738,7 +745,7 @@ def render_filter(component, dataframe):
                 label,
                 options,
                 key=state_key,
-                help=help_text,
+                label_visibility=label_visibility,
                 required=True,
                 width=widget_width,
             )
@@ -747,7 +754,7 @@ def render_filter(component, dataframe):
                 label,
                 options,
                 key=state_key,
-                help=help_text,
+                label_visibility=label_visibility,
                 required=True,
                 width=widget_width,
             )
@@ -756,7 +763,7 @@ def render_filter(component, dataframe):
                 label,
                 options,
                 key=state_key,
-                help=help_text,
+                label_visibility=label_visibility,
                 width=280 if widget_width == "content" else widget_width,
             )
 
@@ -867,7 +874,7 @@ def render_table(component, dataframe, available_height):
     st.dataframe(
         table_data,
         width="stretch",
-        height=max(140, available_height),
+        height="content",
         hide_index=component.get("hideIndex", True),
     )
 
@@ -1067,16 +1074,7 @@ def render_component(
     height_mode = component.get("heightMode") or (
         "auto" if compact_component else "fixed"
     )
-    is_content_sized = (
-        compact_component
-        and (
-            grouped
-            or (
-                component_type in {"text", "page_link"}
-                and height_mode == "auto"
-            )
-        )
-    )
+    is_content_sized = compact_component and (grouped or height_mode == "auto")
     if compact_component:
         content_height = max(60, requested_height)
     else:
