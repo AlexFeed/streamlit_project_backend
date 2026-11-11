@@ -1315,9 +1315,27 @@ class RuntimeRendererTests(unittest.TestCase):
             label="Продажи",
             value="30",
             help=None,
+            label_visibility="visible",
             border=False,
             width="stretch",
             height="content",
+        )
+
+    def test_metric_renderer_collapses_automatic_label(self):
+        component = {
+            "title": "",
+            "field": "sales",
+            "aggregation": "sum",
+        }
+        dataframe = pd.DataFrame({"sales": [10, 20]})
+
+        with patch.object(render_core.st, "metric") as metric_mock:
+            render_core.render_metric(component, dataframe)
+
+        self.assertEqual(metric_mock.call_args.kwargs["label"], "sales")
+        self.assertEqual(
+            metric_mock.call_args.kwargs["label_visibility"],
+            "collapsed",
         )
 
     def test_metric_renderer_uses_optional_description_as_help(self):
@@ -1342,6 +1360,15 @@ class RuntimeRendererTests(unittest.TestCase):
         self.assertEqual(render_core.grid_height(metric), 6)
         self.assertEqual(render_core.grid_height(text), 2)
         self.assertEqual(render_core.grid_height(selectbox), 4)
+
+    def test_manually_resized_text_keeps_fixed_height(self):
+        text = {
+            "type": "text",
+            "heightMode": "fixed",
+            "layout": {"height": 160},
+        }
+
+        self.assertEqual(render_core.grid_height(text), 6)
 
     def test_renderer_keeps_editor_grid_coordinates(self):
         components = [

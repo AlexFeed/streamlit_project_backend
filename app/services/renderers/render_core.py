@@ -66,6 +66,24 @@ NATIVE_PAGE_STYLE = """
     text-overflow: clip !important;
     white-space: nowrap !important;
   }
+  [data-testid="stElementToolbar"] {
+    top: .35rem !important;
+    right: .35rem !important;
+    z-index: 1000 !important;
+    overflow: visible !important;
+    border: 1px solid rgba(148, 163, 184, .22) !important;
+    border-radius: 9px !important;
+    background: #111318 !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .3) !important;
+  }
+  [data-testid="stElementToolbar"] button {
+    color: #cbd5e1 !important;
+    background: transparent !important;
+  }
+  [data-testid="stElementToolbar"] button:hover {
+    color: #f8fafc !important;
+    background: rgba(148, 163, 184, .12) !important;
+  }
   [data-testid="stSelectbox"] label {
     color: #cbd5e1;
     font-size: .86rem;
@@ -286,7 +304,10 @@ def grid_height(component):
                 / (GRID_ROW_HEIGHT + GRID_ROW_GAP)
             ),
         )
-        if component_type == "text" or component.get("heightMode") == "auto":
+        height_mode = component.get("heightMode") or (
+            "auto" if component_type == "text" else "fixed"
+        )
+        if height_mode == "auto":
             return automatic_rows
         pitch = GRID_ROW_HEIGHT + GRID_ROW_GAP
         requested_rows = max(1, (requested + GRID_ROW_GAP + pitch - 1) // pitch)
@@ -547,10 +568,6 @@ def dashboard_grid_style(placements, components=None):
             f".{key_class} {{",
             f"  padding: {component_padding}px;",
             f"  padding-inline: {safe_inline_padding}px;",
-            "  overflow-y: hidden !important;",
-            "}",
-            f".{key_class} > [data-testid=\"stVerticalBlock\"] {{",
-            "  overflow-y: hidden !important;",
             "}",
         ])
         text_color = component.get("elementTextColor", "#d4d4d8")
@@ -779,10 +796,12 @@ def render_metric(component, dataframe):
         st.warning(str(error))
         return
     description = (component.get("description") or "").strip()
+    title = (component.get("title") or "").strip()
     st.metric(
-        label=component.get("title") or "Метрика",
+        label=title or component.get("field") or "Значение",
         value=format_metric(value),
         help=description or None,
+        label_visibility="visible" if title else "collapsed",
         border=False,
         width=component.get("contentWidth", "stretch"),
         height="content",
@@ -1079,7 +1098,8 @@ def render_component(
         content_height = max(60, requested_height)
     else:
         outer_height = container_height or requested_height + CARD_CHROME_HEIGHT
-        content_height = max(140, outer_height - STREAMLIT_CHROME_HEIGHT)
+        title_height = STREAMLIT_CHROME_HEIGHT if component.get("title") else 44
+        content_height = max(140, outer_height - title_height)
     with st.container(
             height="content" if is_content_sized else (container_height or content_height),
             border=show_border,
@@ -1096,10 +1116,12 @@ def render_component(
         elif component_type == "page_link":
             render_page_link(component, navigation_pages or {})
         elif component_type == "table":
-            st.markdown(f"**{component.get('title') or 'Таблица'}**")
+            if component.get("title"):
+                st.markdown(f"**{component['title']}**")
             render_table(component, filtered_dataframe, content_height)
         else:
-            st.markdown(f"**{component.get('title') or 'График'}**")
+            if component.get("title"):
+                st.markdown(f"**{component['title']}**")
             render_chart(component, filtered_dataframe, content_height)
 
 
