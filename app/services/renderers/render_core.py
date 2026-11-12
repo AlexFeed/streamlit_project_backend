@@ -142,7 +142,9 @@ def prepare_chart_data(dataframe, x, y, aggregation="none", sort_order="none", s
     if chart_df.empty:
         return chart_df
     if aggregation != "count":
-        chart_df[y] = pd.to_numeric(chart_df[y], errors="coerce")
+        # Keep preview and canvas rules identical for values such as
+        # "1 600" and "20,5" that are valid numeric CSV cells.
+        chart_df[y] = numeric_series(chart_df[y])
         chart_df = chart_df.dropna(subset=[y])
     if aggregation != "none":
         chart_df = (
@@ -166,11 +168,24 @@ def calculate_metric(dataframe, field, aggregation="sum"):
         return int(dataframe[field].count())
     if aggregation not in SUPPORTED_AGGREGATIONS - {"none"}:
         raise ValueError(f"Неизвестная агрегация: {aggregation}")
-    values = pd.to_numeric(dataframe[field], errors="coerce").dropna()
+    values = numeric_series(dataframe[field]).dropna()
     if values.empty:
         return 0
     result = values.agg(aggregation)
     return result.item() if hasattr(result, "item") else result
+
+
+def numeric_series(series):
+    if pd.api.types.is_numeric_dtype(series):
+        return pd.to_numeric(series, errors="coerce")
+    normalized = (
+        series.astype("string")
+        .str.strip()
+        .str.replace(" ", "", regex=False)
+        .str.replace("\u00a0", "", regex=False)
+        .str.replace(",", ".", regex=False)
+    )
+    return pd.to_numeric(normalized, errors="coerce")
 
 
 def format_metric(value):
@@ -197,6 +212,8 @@ def filter_options(component, dataframe):
 
 
 def selected_filter_value(component, dataframe):
+    if component.get("type") == "data_control":
+        return st.session_state.get(component_state_key(component))
     options = filter_options(component, dataframe)
     state_value = st.session_state.get(component_state_key(component))
     if component.get("widget", "selectbox") == "multiselect":
@@ -233,6 +250,17 @@ def apply_filters(schema, datasets, page_id=None):
         if field not in source_df.columns:
             continue
         selected = selected_filter_value(component, source_df)
+        if component.get("type") == "data_control":
+            control_type = component.get("controlType", "range")
+            if control_type == "range" and isinstance(selected, (tuple, list)) and len(selected) == 2:
+                numeric = numeric_series(filtered_df[field])
+                filtered_datasets[dataset_id] = filtered_df[numeric.between(selected[0], selected[1])]
+            elif control_type == "date" and isinstance(selected, (tuple, list)) and len(selected) == 2:
+                dates = pd.to_datetime(filtered_df[field], errors="coerce").dt.date
+                filtered_datasets[dataset_id] = filtered_df[dates.between(selected[0], selected[1])]
+            elif control_type == "toggle" and selected:
+                filtered_datasets[dataset_id] = filtered_df[filtered_df[field].astype(bool)]
+            continue
         if isinstance(selected, list) and selected:
             filtered_datasets[dataset_id] = filtered_df[
                 filtered_df[field].astype(str).isin(selected)
@@ -271,13 +299,20 @@ def automatic_component_height(component):
         )
     if component_type == "page_link":
         return 40 + padding
-    if component_type == "metric":
+    if component_type in {"metric", "progress"}:
         # st.metric has its own label/value spacing in addition to our card
         # padding. Reserve the complete widget height so the following grid
         # item cannot start inside the metric card.
         return 58 + (18 if component.get("description") else 0) + padding
     if component_type == "selectbox":
+        widget = component.get("widget", "selectbox")
+        if widget in {"radio", "segmented", "pills"}:
+            return 104 + padding
+        if widget == "multiselect":
+            return 120 + padding
         return 56 + padding
+    if component_type == "data_control":
+        return 72 + padding
     return int(component.get("layout", {}).get("height", 320))
 
 
@@ -295,7 +330,7 @@ def automatic_container_height(component):
 def grid_height(component):
     requested = int(component.get("layout", {}).get("height", 320))
     component_type = component.get("type")
-    if component_type in {"text", "metric", "selectbox", "page_link"}:
+    if component_type in {"text", "metric", "selectbox", "data_control", "progress", "page_link"}:
         height = automatic_component_height(component)
         automatic_rows = max(
             1,
@@ -316,7 +351,7 @@ def grid_height(component):
         return requested_rows
     chrome_height = (
         0
-        if component_type in {"text", "metric", "selectbox", "page_link"}
+        if component_type in {"text", "metric", "selectbox", "data_control", "progress", "page_link", "tab_group"}
         else CARD_CHROME_HEIGHT
     )
     pitch = GRID_ROW_HEIGHT + GRID_ROW_GAP
@@ -364,6 +399,20 @@ def pages_from_schema(schema):
 def pack_components(components):
     placed = []
 
+    def component_width(component):
+        minimums = {
+            "text": 2,
+            "metric": 2,
+            "selectbox": 2,
+            "data_control": 2,
+            "progress": 2,
+            "page_link": 2,
+            "table": 3,
+            "tab_group": 3,
+        }
+        requested = int(component.get("layout", {}).get("width", 6))
+        return max(minimums.get(component.get("type"), 2), min(GRID_COLUMNS, requested))
+
     def overlaps(candidate, current):
         return (
                 candidate["x"] < current["x"] + current["w"]
@@ -384,7 +433,7 @@ def pack_components(components):
 
     for component in explicit:
         layout = component.get("layout", {})
-        width = max(1, min(GRID_COLUMNS, int(layout.get("width", 6))))
+        width = component_width(component)
         source_x = max(0, min(GRID_COLUMNS - width, int(layout.get("x", 0))))
         source_y = max(0, int(layout.get("y", 0)))
         candidate = {
@@ -402,7 +451,7 @@ def pack_components(components):
         placed.append(candidate)
 
     for component in automatic:
-        width = max(1, min(GRID_COLUMNS, int(component.get("layout", {}).get("width", 6))))
+        width = component_width(component)
         height = grid_height(component)
         position = None
         for y in range(10000):
@@ -460,7 +509,7 @@ def dashboard_grid_style(placements, components=None):
         component = item["component"]
         key_class = f"st-key-{card_container_key(component)}"
         compact_component = component.get("type") in {
-            "text", "metric", "selectbox", "page_link",
+            "text", "metric", "selectbox", "data_control", "progress", "page_link",
         }
         automatic_height = (
             compact_component
@@ -518,8 +567,18 @@ def dashboard_grid_style(placements, components=None):
                 "  border-radius: 0.75rem;",
                 "}",
             ])
+        if component.get("type") == "progress":
+            progress_color = component.get("color", "#10b981")
+            rules.extend([
+                f'.{key_class} [data-testid="stProgressBar"] [role="progressbar"] > div {{',
+                f"  background-color: {progress_color} !important;",
+                "}",
+                f'.{key_class} [data-testid="stProgressBar"] > div > div {{',
+                f"  background-color: {progress_color} !important;",
+                "}",
+            ])
         compact_component = component.get("type") in {
-            "text", "metric", "selectbox", "page_link",
+            "text", "metric", "selectbox", "data_control", "progress", "page_link",
         }
         automatic_height = (
             compact_component
@@ -553,6 +612,16 @@ def dashboard_grid_style(placements, components=None):
                 "  height: auto !important;",
                 "  min-height: 0 !important;",
                 "  overflow: visible !important;",
+                "}",
+            ])
+        elif component.get("type") == "tab_group":
+            rules.extend([
+                f".{key_class} {{",
+                "  overflow: hidden !important;",
+                "}",
+                f'.{key_class}[data-testid="stVerticalBlockBorderWrapper"],',
+                f'.{key_class} [data-testid="stVerticalBlockBorderWrapper"] {{',
+                "  overflow: hidden !important;",
                 "}",
             ])
         component_padding = int(component.get("padding", 12))
@@ -671,13 +740,48 @@ def axis_tick_values(values, layout_width):
 def prepare_plot_frame(view, dataframe):
     x = view.get("x")
     y = view.get("y")
+    aggregation = view.get("aggregation", "none")
+    sort_order = view.get("sort", "none")
+    sort_by = view.get("sortBy", "x")
+
+    if x and x == y:
+        if x not in dataframe.columns:
+            raise KeyError(x)
+        if aggregation not in SUPPORTED_AGGREGATIONS:
+            raise ValueError(f"Неизвестная агрегация: {aggregation}")
+        if sort_order not in SUPPORTED_SORT_ORDERS or sort_by not in SUPPORTED_SORT_FIELDS:
+            raise ValueError("Некорректная сортировка")
+        source = dataframe[x].dropna()
+        chart_df = pd.DataFrame({"__x": source, "__y": source})
+        if aggregation != "count":
+            chart_df["__y"] = numeric_series(chart_df["__y"])
+            chart_df = chart_df.dropna(subset=["__y"])
+        if aggregation != "none":
+            chart_df = chart_df.groupby("__x", as_index=False, dropna=False, sort=False)["__y"].agg(aggregation)
+        if sort_order != "none":
+            chart_df = chart_df.sort_values(
+                by="__y" if sort_by == "y" else "__x",
+                ascending=sort_order == "asc",
+                kind="stable",
+            )
+        if chart_df.empty:
+            return chart_df, "nominal"
+        chart_df = downsample_frame(chart_df, chart_point_limit(view)).copy()
+        x_type = infer_x_type(chart_df["__x"], x, view.get("type"))
+        if x_type == "temporal":
+            chart_df["__x"] = pd.to_datetime(chart_df["__x"], errors="coerce")
+            chart_df = chart_df.dropna(subset=["__x"])
+        plot_df = pd.DataFrame({"x": chart_df["__x"], "y": chart_df["__y"].astype(float)})
+        plot_df["label"] = plot_df["x"].astype(str)
+        return plot_df, x_type
+
     chart_df = prepare_chart_data(
         dataframe,
         x,
         y,
-        view.get("aggregation", "none"),
-        view.get("sort", "none"),
-        view.get("sortBy", "x"),
+        aggregation,
+        sort_order,
+        sort_by,
     )
     if chart_df.empty:
         return chart_df, "nominal"
@@ -785,6 +889,43 @@ def render_filter(component, dataframe):
             )
 
 
+def render_data_control(component, dataframe):
+    field = component.get("field")
+    if field not in dataframe.columns:
+        st.warning("Выбранное поле не найдено.")
+        return
+    title = (component.get("title") or "").strip()
+    label = title or field
+    visibility = "visible" if title else "collapsed"
+    state_key = component_state_key(component)
+    control_type = component.get("controlType", "range")
+    if control_type == "range":
+        values = numeric_series(dataframe[field]).dropna()
+        if values.empty:
+            st.warning("В поле нет числовых значений.")
+            return
+        minimum, maximum = float(values.min()), float(values.max())
+        if minimum == maximum:
+            st.caption(format_metric(minimum))
+            return
+        current = st.session_state.get(state_key)
+        if not isinstance(current, (tuple, list)) or len(current) != 2:
+            st.session_state[state_key] = (minimum, maximum)
+        st.slider(label, minimum, maximum, key=state_key, label_visibility=visibility)
+    elif control_type == "date":
+        values = pd.to_datetime(dataframe[field], errors="coerce").dropna()
+        if values.empty:
+            st.warning("В поле нет дат.")
+            return
+        minimum, maximum = values.min().date(), values.max().date()
+        current = st.session_state.get(state_key)
+        if not isinstance(current, (tuple, list)) or len(current) != 2:
+            st.session_state[state_key] = (minimum, maximum)
+        st.date_input(label, key=state_key, min_value=minimum, max_value=maximum, label_visibility=visibility)
+    else:
+        st.toggle(label, key=state_key, label_visibility=visibility)
+
+
 def render_metric(component, dataframe):
     try:
         value = calculate_metric(
@@ -806,6 +947,26 @@ def render_metric(component, dataframe):
         width=component.get("contentWidth", "stretch"),
         height="content",
     )
+
+
+def render_progress(component, dataframe):
+    try:
+        value = float(calculate_metric(dataframe, component.get("field"), component.get("aggregation", "mean")))
+    except (KeyError, ValueError, TypeError):
+        st.warning("Проверьте поле и агрегацию прогресса.")
+        return
+    minimum = float(component.get("minimum", 0))
+    maximum = float(component.get("maximum", 100))
+    if maximum <= minimum:
+        st.warning("Максимум прогресса должен быть больше минимума.")
+        return
+    ratio = max(0.0, min(1.0, (value - minimum) / (maximum - minimum)))
+    text = format_metric(value) if component.get("showValue", True) else None
+    progress_width = component.get("contentWidth", "stretch")
+    # st.progress rejects "content" with StreamlitInvalidWidthError.
+    if progress_width == "content":
+        progress_width = 280
+    st.progress(ratio, text=text, width=progress_width)
 
 
 def render_text(component):
@@ -901,8 +1062,11 @@ def render_table(component, dataframe, available_height):
 def render_chart(view, dataframe, available_height):
     try:
         plot_df, x_type = prepare_plot_frame(view, dataframe)
-    except (KeyError, ValueError, TypeError):
-        st.warning("Проверьте выбранные поля и агрегацию.")
+    except KeyError as error:
+        st.warning(f"В источнике данных нет поля: {str(error).strip(chr(39))}.")
+        return
+    except (ValueError, TypeError, AttributeError) as error:
+        st.warning(f"Проверьте настройки графика: {error}")
         return
     if plot_df.empty:
         st.info("Нет данных для отображения.")
@@ -1089,7 +1253,7 @@ def render_component(
     horizontal_alignment = component.get("contentAlignment", "left")
     vertical_alignment = component.get("verticalAlignment", "top")
     requested_height = int(component.get("layout", {}).get("height", 320))
-    compact_component = component_type in {"text", "metric", "selectbox", "page_link"}
+    compact_component = component_type in {"text", "metric", "selectbox", "data_control", "progress", "page_link"}
     height_mode = component.get("heightMode") or (
         "auto" if compact_component else "fixed"
     )
@@ -1109,8 +1273,12 @@ def render_component(
     ):
         if component_type == "selectbox":
             render_filter(component, source_dataframe)
+        elif component_type == "data_control":
+            render_data_control(component, source_dataframe)
         elif component_type == "metric":
             render_metric(component, filtered_dataframe)
+        elif component_type == "progress":
+            render_progress(component, filtered_dataframe)
         elif component_type == "text":
             render_text(component)
         elif component_type == "page_link":
@@ -1144,7 +1312,7 @@ def render_layout_group(
         component.get("pageId", DEFAULT_PAGE_ID),
         component.get("id"),
     )
-    compact_types = {"text", "metric", "selectbox", "page_link"}
+    compact_types = {"text", "metric", "selectbox", "data_control", "progress", "page_link"}
     group_height = (
         "content"
         if children and all(child.get("type") in compact_types for child in children)
@@ -1187,6 +1355,68 @@ def render_layout_group(
                 )
 
 
+def render_tab_group(component, schema, datasets, filtered_datasets, navigation_pages, container_height):
+    tabs = component.get("tabs") or []
+    if not tabs:
+        return
+    children = components_from_schema(
+        schema,
+        component.get("pageId", DEFAULT_PAGE_ID),
+        component.get("id"),
+    )
+    tab_containers = st.tabs([tab.get("label", "Вкладка") for tab in tabs])
+    fallback_id = tabs[0].get("id")
+
+    def render_tab_child(child, available_height):
+        if child.get("type") in {"text", "page_link"}:
+            render_component(child, None, None, None, navigation_pages, grouped=True)
+            return
+        dataset_id = resolve_dataset_id(child, datasets)
+        render_component(
+            child,
+            datasets[dataset_id],
+            filtered_datasets[dataset_id],
+            available_height if child.get("type") not in {"metric", "selectbox", "data_control", "progress"} else None,
+            navigation_pages,
+            grouped=True,
+        )
+
+    for tab, tab_container in zip(tabs, tab_containers):
+        tab_id = tab.get("id")
+        with tab_container:
+            tab_children = [
+                child for child in children
+                if (
+                    child.get("tabId")
+                    if any(item.get("id") == child.get("tabId") for item in tabs)
+                    else fallback_id
+                ) == tab_id
+            ]
+            rows = []
+            current_row = []
+            occupied = 0
+            for child in tab_children:
+                minimum = 2
+                width = max(minimum, min(12, int(child.get("layout", {}).get("width", 6))))
+                if current_row and occupied + width > 12:
+                    rows.append(current_row)
+                    current_row, occupied = [], 0
+                current_row.append((child, width))
+                occupied += width
+            if current_row:
+                rows.append(current_row)
+            # Streamlit tabs and chart wrappers add their own vertical chrome.
+            # Reserve it here so the fixed dashboard card never needs an
+            # internal scrollbar just to fit otherwise correctly-sized charts.
+            usable_height = max(120, container_height - 72 - max(0, len(rows) - 1) * GRID_ROW_GAP)
+            row_height = max(120, usable_height // max(1, len(rows)))
+            for row in rows:
+                columns = st.columns([width for _, width in row], gap="small")
+                for column, (child, _) in zip(columns, row):
+                    with column:
+                        render_tab_child(child, row_height)
+
+
 # Точка входа которая генерирует весь streamlit код
 def render_dashboard(schema, datasets, page_id=None, navigation_pages=None):
     placements = pack_components(components_from_schema(schema, page_id))
@@ -1196,6 +1426,8 @@ def render_dashboard(schema, datasets, page_id=None, navigation_pages=None):
     st.markdown(
         dashboard_grid_style(
             placements,
+            # Root placements control the page grid; the complete component
+            # list is used only for each nested card's appearance rules.
             all_components_from_schema(schema, page_id),
         ),
         unsafe_allow_html=True,
@@ -1213,6 +1445,24 @@ def render_dashboard(schema, datasets, page_id=None, navigation_pages=None):
                     grid_pixel_height(item["h"]),
                     navigation_pages,
                 )
+                continue
+            if component.get("type") == "tab_group":
+                show_border = component.get("showBorder")
+                if show_border is None:
+                    show_border = component.get("surface", "none") == "card"
+                with st.container(
+                        key=card_container_key(component),
+                        height="content",
+                        border=show_border,
+                ):
+                    render_tab_group(
+                        component,
+                        schema,
+                        datasets,
+                        filtered_datasets,
+                        navigation_pages,
+                        grid_pixel_height(item["h"]),
+                    )
                 continue
             if component.get("type") == "page_link":
                 render_component(

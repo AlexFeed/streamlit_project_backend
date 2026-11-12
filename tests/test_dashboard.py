@@ -331,6 +331,21 @@ class DataTransformTests(unittest.TestCase):
             3,
         )
 
+    def test_metric_supports_all_aggregations_and_ignores_invalid_numbers(self):
+        dataframe = pd.DataFrame({"value": ["10", "20,5", "1 000", None, "bad"]})
+
+        self.assertEqual(calculate_metric(dataframe, "value", "sum"), 1030.5)
+        self.assertEqual(calculate_metric(dataframe, "value", "mean"), 343.5)
+        self.assertEqual(calculate_metric(dataframe, "value", "min"), 10)
+        self.assertEqual(calculate_metric(dataframe, "value", "max"), 1000)
+        # Count follows pandas/Streamlit semantics: every non-empty source
+        # value counts, even when it cannot be converted to a number.
+        self.assertEqual(calculate_metric(dataframe, "value", "count"), 4)
+
+    def test_metric_returns_zero_when_numeric_column_has_no_valid_values(self):
+        dataframe = pd.DataFrame({"value": [None, "", "bad"]})
+        self.assertEqual(calculate_metric(dataframe, "value", "sum"), 0)
+
     def test_counts_non_numeric_chart_values(self):
         result = prepare_chart_data(pd.DataFrame({
             "region": ["A", "A", "B"],
@@ -1061,6 +1076,37 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual(len(app.dataframe), 1)
         self.assertEqual(len(app.page_link), 1)
 
+    def test_generated_tab_group_starts_with_multiple_children(self):
+        schema = make_schema()
+        schema["views"].append({
+            "id": "tabs-1",
+            "type": "tab_group",
+            "pageId": "page-main",
+            "order": 10,
+            "layout": {"width": 12, "height": 360},
+            "tabs": [
+                {"id": "tab-1", "label": "Обзор продаж"},
+                {"id": "tab-2", "label": "Детали"},
+            ],
+        })
+        schema["views"][0].update({"parentId": "tabs-1", "tabId": "tab-1", "layout": {"width": 4, "height": 220}})
+        schema["views"][1].update({"parentId": "tabs-1", "tabId": "tab-1", "layout": {"width": 4, "height": 100}})
+        code = generate_streamlit_code(validate_dashboard_schema(schema))
+
+        with tempfile.TemporaryDirectory() as directory:
+            project_dir = Path(directory)
+            data_dir = project_dir / "data"
+            data_dir.mkdir()
+            (project_dir / "app.py").write_text(code, encoding="utf-8")
+            (data_dir / "sales.csv").write_text(
+                "date,region,sales\n2026-01-01,A,10\n2026-01-02,B,20\n",
+                encoding="utf-8",
+            )
+            app = AppTest.from_file(project_dir / "app.py", default_timeout=20)
+            app.run()
+
+        self.assertEqual(len(app.exception), 0)
+
     def test_generated_dashboard_executes_in_streamlit_bare_mode(self):
         schema = make_schema()
         schema["views"][0].update({
@@ -1102,6 +1148,72 @@ class GeneratorTests(unittest.TestCase):
 
 
 class RuntimeRendererTests(unittest.TestCase):
+    def test_chart_supports_the_same_field_on_both_axes(self):
+        dataframe = pd.DataFrame({"price": [1, 2, 2, 3]})
+        plot_df, x_type = render_core.prepare_plot_frame({
+            "type": "area_chart",
+            "x": "price",
+            "y": "price",
+            "aggregation": "sum",
+            "sort": "asc",
+            "sortBy": "x",
+            "layout": {"width": 6, "height": 320},
+        }, dataframe)
+
+        self.assertEqual(x_type, "quantitative")
+        self.assertEqual(plot_df["x"].tolist(), [1, 2, 3])
+        self.assertEqual(plot_df["y"].tolist(), [1.0, 4.0, 3.0])
+
+    def test_tab_group_height_does_not_add_chart_chrome(self):
+        component = {
+            "id": "tabs-1",
+            "type": "tab_group",
+            "layout": {"x": 0, "y": 0, "width": 8, "height": 300},
+        }
+        expected = (300 + render_core.GRID_ROW_GAP + 27) // 28
+        self.assertEqual(render_core.grid_height(component), expected)
+        style = render_core.dashboard_grid_style([
+            {"x": 0, "y": 0, "w": 8, "h": expected, "component": component},
+        ])
+        self.assertIn("overflow: hidden !important;", style)
+
+    def test_progress_content_width_is_mapped_to_supported_pixel_width(self):
+        component = {
+            "id": "progress-1",
+            "type": "progress",
+            "field": "value",
+            "aggregation": "mean",
+            "minimum": 0,
+            "maximum": 100,
+            "contentWidth": "content",
+        }
+        dataframe = pd.DataFrame({"value": [20, 40]})
+
+        with patch.object(render_core.st, "progress") as progress_mock:
+            render_core.render_progress(component, dataframe)
+
+        self.assertEqual(progress_mock.call_args.kwargs["width"], 280)
+
+    def test_progress_rejects_an_empty_range_without_dividing_by_zero(self):
+        component = {
+            "id": "progress-1",
+            "type": "progress",
+            "field": "value",
+            "aggregation": "mean",
+            "minimum": 10,
+            "maximum": 10,
+        }
+        dataframe = pd.DataFrame({"value": [10]})
+
+        with (
+            patch.object(render_core.st, "warning") as warning_mock,
+            patch.object(render_core.st, "progress") as progress_mock,
+        ):
+            render_core.render_progress(component, dataframe)
+
+        warning_mock.assert_called_once()
+        progress_mock.assert_not_called()
+
     def test_auto_height_text_wraps_its_content_even_with_border(self):
         component = {
             "id": "text-1",

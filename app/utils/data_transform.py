@@ -9,6 +9,19 @@ SUPPORTED_SORT_FIELDS = {"x", "y"}
 BUILDER_COLOR_COLUMN = "__builder_color__"
 
 
+def numeric_series(series):
+    if pd.api.types.is_numeric_dtype(series):
+        return pd.to_numeric(series, errors="coerce")
+    return pd.to_numeric(
+        series.astype("string")
+        .str.strip()
+        .str.replace(" ", "", regex=False)
+        .str.replace("\u00a0", "", regex=False)
+        .str.replace(",", ".", regex=False),
+        errors="coerce",
+    )
+
+
 def prepare_chart_data(dataframe, view: dict):
     x = view.get("x")
     y = view.get("y")
@@ -36,7 +49,7 @@ def prepare_chart_data(dataframe, view: dict):
         return chart_df
 
     if aggregation != "count":
-        chart_df[y] = pd.to_numeric(chart_df[y], errors="coerce")
+        chart_df[y] = numeric_series(chart_df[y])
         chart_df = chart_df.dropna(subset=[y])
 
     if aggregation != "none":
@@ -66,7 +79,7 @@ def calculate_metric(dataframe, field: str, aggregation: str) -> Any:
     if aggregation not in SUPPORTED_AGGREGATIONS - {"none"}:
         raise ValueError(f"Неизвестная агрегация: {aggregation}")
 
-    values = pd.to_numeric(dataframe[field], errors="coerce").dropna()
+    values = numeric_series(dataframe[field]).dropna()
     if values.empty:
         return 0
 

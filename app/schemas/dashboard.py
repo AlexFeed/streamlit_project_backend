@@ -64,6 +64,7 @@ class ComponentBase(BaseModel):
     page_id: str = Field(default=DEFAULT_PAGE_ID, alias="pageId")
     dataset_id: str | None = Field(default=None, alias="datasetId")
     parent_id: str | None = Field(default=None, alias="parentId")
+    tab_id: str | None = Field(default=None, alias="tabId")
     surface: Surface = "card"
     show_border: bool | None = Field(default=None, alias="showBorder")
     show_background: bool | None = Field(default=None, alias="showBackground")
@@ -127,6 +128,16 @@ class SelectboxFilter(ComponentBase):
     widget: FilterWidget = "selectbox"
 
 
+class DataControlFilter(ComponentBase):
+    type: Literal["data_control"]
+    field: str
+    scope: Literal["global"] = "global"
+    control_type: Literal["range", "date", "toggle"] = Field(
+        default="range",
+        alias="controlType",
+    )
+
+
 class ChartView(ComponentBase):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -155,7 +166,6 @@ class ChartView(ComponentBase):
     axis_label_color: str = Field(default="#94a3b8", alias="axisLabelColor", pattern=r"^#[0-9a-fA-F]{6}$")
     axis_title_font_size: int = Field(default=12, alias="axisTitleFontSize", ge=8, le=24)
     axis_title_color: str = Field(default="#94a3b8", alias="axisTitleColor", pattern=r"^#[0-9a-fA-F]{6}$")
-
     @field_validator("palette")
     @classmethod
     def palette_colors_must_be_hex(cls, colors):
@@ -182,6 +192,22 @@ class MetricView(ComponentBase):
     field: str
     description: str = ""
     aggregation: Literal["sum", "mean", "count", "min", "max"] = "sum"
+
+
+class ProgressView(ComponentBase):
+    type: Literal["progress"]
+    field: str
+    aggregation: Literal["sum", "mean", "count", "min", "max"] = "mean"
+    minimum: float = 0
+    maximum: float = 100
+    show_value: bool = Field(default=True, alias="showValue")
+    color: str = Field(default="#10b981", pattern=r"^#[0-9a-fA-F]{6}$")
+
+    @model_validator(mode="after")
+    def maximum_must_exceed_minimum(self):
+        if self.maximum <= self.minimum:
+            raise ValueError("Progress maximum must be greater than minimum")
+        return self
 
 
 class TextView(ComponentBase):
@@ -257,8 +283,22 @@ class LayoutGroupView(ComponentBase):
     wrap: bool = True
 
 
+class TabDefinition(BaseModel):
+    id: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+
+
+class TabGroupView(ComponentBase):
+    type: Literal["tab_group"]
+    surface: Surface = "none"
+    tabs: list[TabDefinition] = Field(min_length=1, max_length=8)
+    active_tab_id: str = Field(default="", alias="activeTabId")
+    gap: int = Field(default=8, ge=0, le=32)
+    padding: int = Field(default=8, ge=0, le=32)
+
+
 DashboardView = Annotated[
-    Union[ChartView, MetricView, TextView, PageLinkView, TableView, LayoutGroupView],
+    Union[ChartView, MetricView, ProgressView, TextView, PageLinkView, TableView, LayoutGroupView, TabGroupView],
     Field(discriminator="type"),
 ]
 
@@ -273,7 +313,7 @@ class DashboardSchema(BaseModel):
         min_length=1,
     )
     data_sources: list[DataSource] = Field(alias="dataSources", min_length=1)
-    filters: list[SelectboxFilter] = Field(default_factory=list)
+    filters: list[Annotated[Union[SelectboxFilter, DataControlFilter], Field(discriminator="type")]] = Field(default_factory=list)
     views: list[DashboardView] = Field(default_factory=list)
 
     @field_validator("filters", "views")
@@ -299,7 +339,7 @@ class DashboardSchema(BaseModel):
         groups = {
             component.id: component
             for component in components
-            if component.type == "layout_group"
+            if component.type in {"layout_group", "tab_group"}
         }
         for component in components:
             if component.page_id not in page_ids:
@@ -314,13 +354,13 @@ class DashboardSchema(BaseModel):
                     f'Target page "{component.target_page_id}" does not exist'
                 )
             if (
-                component.type not in {"text", "metric", "selectbox", "page_link", "layout_group"}
+                component.type not in {"text", "metric", "selectbox", "data_control", "progress", "page_link", "layout_group", "tab_group"}
                 and component.layout.height < 120
             ):
                 raise ValueError(
                     "Chart height must be at least 120 pixels"
                 )
-            if component.type == "layout_group" and component.parent_id:
+            if component.type in {"layout_group", "tab_group"} and component.parent_id:
                 raise ValueError("Layout groups cannot be nested")
             if component.parent_id:
                 parent = groups.get(component.parent_id)
