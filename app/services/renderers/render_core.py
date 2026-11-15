@@ -19,11 +19,8 @@ NATIVE_PAGE_STYLE = """
   }
   .block-container {
     width: 100%;
-    /* 1040px minus page padding gives the same 960px working width as the
-       editor canvas. Grid columns, wrapping and component heights therefore
-       stay truthful between the builder and the generated application. */
-    max-width: 1040px;
-    padding: 2rem 2.5rem 3rem;
+    max-width: 100%;
+    padding: 1.5rem 1rem 2rem;
   }
   .block-container h1 {
     margin: 0;
@@ -330,7 +327,7 @@ def automatic_container_height(component):
 def grid_height(component):
     requested = int(component.get("layout", {}).get("height", 320))
     component_type = component.get("type")
-    if component_type in {"text", "metric", "selectbox", "data_control", "progress", "page_link"}:
+    if component_type in {"text", "metric", "selectbox", "data_control", "progress"}:
         height = automatic_component_height(component)
         automatic_rows = max(
             1,
@@ -509,7 +506,7 @@ def dashboard_grid_style(placements, components=None):
         component = item["component"]
         key_class = f"st-key-{card_container_key(component)}"
         compact_component = component.get("type") in {
-            "text", "metric", "selectbox", "data_control", "progress", "page_link",
+            "text", "metric", "selectbox", "data_control", "progress",
         }
         automatic_height = (
             compact_component
@@ -578,7 +575,7 @@ def dashboard_grid_style(placements, components=None):
                 "}",
             ])
         compact_component = component.get("type") in {
-            "text", "metric", "selectbox", "data_control", "progress", "page_link",
+            "text", "metric", "selectbox", "data_control", "progress",
         }
         automatic_height = (
             compact_component
@@ -625,6 +622,8 @@ def dashboard_grid_style(placements, components=None):
                 "}",
             ])
         component_padding = int(component.get("padding", 12))
+        if component.get("type") == "page_link":
+            component_padding = 0
         show_border = component.get("showBorder")
         if show_border is None:
             show_border = surface == "card"
@@ -668,11 +667,20 @@ def dashboard_grid_style(placements, components=None):
             ])
         if component.get("type") == "page_link" and component.get("displayStyle", "button") == "button":
             button_color = component.get("buttonColor", "#f47721")
+            text_color = component.get("elementTextColor", "#ffffff")
             rules.extend([
+                f".{key_class} > [data-testid=\"stVerticalBlock\"],",
+                f".{key_class} [data-testid=\"stElementContainer\"],",
+                f".{key_class} [data-testid=\"stButton\"] {{",
+                "  width: 100% !important;",
+                "  height: 100% !important;",
+                "}",
                 f".{key_class} [data-testid=\"stButton\"] button {{",
+                "  width: 100% !important;",
+                "  height: 100% !important;",
                 f"  background: {button_color} !important;",
                 f"  border-color: {button_color} !important;",
-                "  color: #ffffff !important;",
+                f"  color: {text_color} !important;",
                 "}",
             ])
     rules.extend([
@@ -1016,10 +1024,10 @@ def render_page_link(component, navigation_pages):
             width=component.get("contentWidth", "content"),
         )
     elif st.button(
-        label,
-        key=f"navigate_{component_state_key(component)}",
-        type="primary",
-        width=component.get("contentWidth", "content"),
+            label,
+            key=f"navigate_{component_state_key(component)}",
+            type="primary",
+            width=component.get("contentWidth", "stretch"),
     ):
         st.switch_page(target_page)
 
@@ -1253,7 +1261,7 @@ def render_component(
     horizontal_alignment = component.get("contentAlignment", "left")
     vertical_alignment = component.get("verticalAlignment", "top")
     requested_height = int(component.get("layout", {}).get("height", 320))
-    compact_component = component_type in {"text", "metric", "selectbox", "data_control", "progress", "page_link"}
+    compact_component = component_type in {"text", "metric", "selectbox", "data_control", "progress"}
     height_mode = component.get("heightMode") or (
         "auto" if compact_component else "fixed"
     )
