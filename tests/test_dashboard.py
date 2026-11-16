@@ -1264,7 +1264,7 @@ class RuntimeRendererTests(unittest.TestCase):
         self.assertIn("st-key-card_builder_filter_page_link", style)
         self.assertIn("color: #60a5fa !important", style)
 
-    def test_grouped_page_link_uses_content_height(self):
+    def test_grouped_page_link_uses_fixed_render_height(self):
         component = {
             "id": "link-1",
             "type": "page_link",
@@ -1285,7 +1285,10 @@ class RuntimeRendererTests(unittest.TestCase):
                 grouped=True,
             )
 
-        self.assertEqual(container_mock.call_args.kwargs["height"], "content")
+        self.assertEqual(
+            container_mock.call_args.kwargs["height"],
+            120 + render_core.CARD_CHROME_HEIGHT - 44,
+        )
 
     def test_auto_height_text_is_not_stretched_to_grid_row(self):
         component = {
@@ -1332,7 +1335,7 @@ class RuntimeRendererTests(unittest.TestCase):
                 navigation_pages={"page-details": object()},
             )
 
-        self.assertEqual(container_mock.call_args.kwargs["height"], "content")
+        self.assertEqual(container_mock.call_args.kwargs["height"], 92)
         self.assertFalse(container_mock.call_args.kwargs["border"])
 
     def test_table_renderer_uses_filtered_rows_and_selected_columns(self):
