@@ -1074,7 +1074,7 @@ class GeneratorTests(unittest.TestCase):
 
         self.assertEqual(len(app.exception), 0)
         self.assertEqual(len(app.dataframe), 1)
-        self.assertEqual(len(app.page_link), 1)
+        self.assertEqual(len(app.get('page_link')), 1)
 
     def test_generated_tab_group_starts_with_multiple_children(self):
         schema = make_schema()
