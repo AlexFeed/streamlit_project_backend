@@ -1,4 +1,5 @@
 import json
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15,7 +16,10 @@ from jwt.exceptions import InvalidTokenError
 # Auth config
 USERS_FILE = Path("storage/users/users.json")
 
-SECRET_KEY = "59438908cf083f26877e255a08ee838128afdcd2f419364c7eab7a7a32cfd3f2"
+SECRET_KEY = os.getenv(
+    "SECRET_KEY",
+    "59438908cf083f26877e255a08ee838128afdcd2f419364c7eab7a7a32cfd3f2",
+)
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # Неделя жизни токена
 
