@@ -6,7 +6,7 @@ from app.services import auth_service, dataset_service
 
 router = APIRouter(prefix="/datasets")
 
-# CRUD ЗАПРОСЫ ДЛЯ ВЗАИМОДЕЙСТВИЯ С ДАТАСЕТАМИ
+# CRUD REQUESTS FOR WORKING WITH DATASETS
 @router.post("/upload")
 async def upload_dataset(
         current_user: Annotated[auth_service.User, Depends(auth_service.get_current_active_user)],
@@ -28,7 +28,7 @@ async def upload_dataset(
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
-        raise HTTPException(status_code=500, detail=f"Ошибка сохранения датасета: {error}") from error
+        raise HTTPException(status_code=500, detail=f"Failed to save dataset: {error}") from error
 
 
 @router.get("/{dataset_id}")
@@ -86,7 +86,7 @@ async def delete_dataset(
 
     return {"deleted": True}
 
-# Загрузка всех листов с excel файла
+# Load all sheets from an Excel file
 @router.post("/inspect-sheets")
 async def inspect_sheets(
         current_user: Annotated[
@@ -101,4 +101,4 @@ async def inspect_sheets(
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
-        raise HTTPException(status_code=500, detail=f"Ошибка чтения книги Excel: {error}") from error
+        raise HTTPException(status_code=500, detail=f"Failed to read Excel workbook: {error}") from error

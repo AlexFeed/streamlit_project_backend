@@ -14,15 +14,15 @@ from app.services.preview_runtime_service import preview_runtime_service
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # При старте backend сразу в фоне запускается steramlit приложение
+    # Start the Streamlit app in the background right when the backend starts
     preview_runtime_service.start()
     yield
-    # При закрытии сервера закрывается stramlit процесс
+    # Stop the Streamlit process when the server shuts down
     preview_runtime_service.stop()
 
 app = FastAPI(title="Streamlit Generator API", lifespan=lifespan)
 
-# CORS (важно для фронта)
+# CORS (important for the frontend)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

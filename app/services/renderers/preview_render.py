@@ -46,7 +46,7 @@ try:
         timeout=10,
     )
 except requests.RequestException as error:
-    st.error(f"Backend preview недоступен: {error}")
+    st.error(f"Backend preview unavailable: {error}")
     st.stop()
 
 if response.status_code != 200:
@@ -109,7 +109,7 @@ for ds_id, file_path in datasets_paths.items():
         )
     except Exception as error:
         display_name = ds_config.get("name") or ds_id
-        st.error(f"Ошибка чтения данных ({display_name}): {error}")
+        st.error(f"Failed to read data ({display_name}): {error}")
         st.stop()
 
 dashboard_title = schema.get("dashboard", {}).get("title") or "Streamlit Dashboard"

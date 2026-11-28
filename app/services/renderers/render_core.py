@@ -125,16 +125,16 @@ SUPPORTED_SORT_FIELDS = {"x", "y"}
 
 def prepare_chart_data(dataframe, x, y, aggregation="none", sort_order="none", sort_by="x"):
     if not x or not y:
-        raise ValueError("Для графика должны быть выбраны поля X и Y")
+        raise ValueError("X and Y fields must be selected for the chart")
     missing_fields = [field for field in (x, y) if field not in dataframe.columns]
     if missing_fields:
         raise KeyError(", ".join(missing_fields))
     if aggregation not in SUPPORTED_AGGREGATIONS:
-        raise ValueError(f"Неизвестная агрегация: {aggregation}")
+        raise ValueError(f"Unknown aggregation: {aggregation}")
     if sort_order not in SUPPORTED_SORT_ORDERS:
-        raise ValueError(f"Неизвестная сортировка: {sort_order}")
+        raise ValueError(f"Unknown sort order: {sort_order}")
     if sort_by not in SUPPORTED_SORT_FIELDS:
-        raise ValueError(f"Неизвестное поле сортировки: {sort_by}")
+        raise ValueError(f"Unknown sort field: {sort_by}")
 
     chart_df = dataframe[[x, y]].dropna().copy()
     if chart_df.empty:
@@ -165,7 +165,7 @@ def calculate_metric(dataframe, field, aggregation="sum") -> Any:
     if aggregation == "count":
         return int(dataframe[field].count())
     if aggregation not in SUPPORTED_AGGREGATIONS - {"none"}:
-        raise ValueError(f"Неизвестная агрегация: {aggregation}")
+        raise ValueError(f"Unknown aggregation: {aggregation}")
     values = numeric_series(dataframe[field]).dropna()
     if values.empty:
         return 0
@@ -757,9 +757,9 @@ def prepare_plot_frame(view, dataframe):
         if x not in dataframe.columns:
             raise KeyError(x)
         if aggregation not in SUPPORTED_AGGREGATIONS:
-            raise ValueError(f"Неизвестная агрегация: {aggregation}")
+            raise ValueError(f"Unknown aggregation: {aggregation}")
         if sort_order not in SUPPORTED_SORT_ORDERS or sort_by not in SUPPORTED_SORT_FIELDS:
-            raise ValueError("Некорректная сортировка")
+            raise ValueError("Invalid sort configuration")
         source = dataframe[x].dropna()
         chart_df = pd.DataFrame({"__x": source, "__y": source})
         if aggregation != "count":
@@ -1427,7 +1427,7 @@ def render_tab_group(component, schema, datasets, filtered_datasets, navigation_
                         render_tab_child(child, row_height)
 
 
-# Точка входа которая генерирует весь streamlit код
+# Entry point that generates all Streamlit dashboard rendering code
 def render_dashboard(schema, datasets, page_id=None, navigation_pages=None):
     placements = pack_components(components_from_schema(schema, page_id))
     if not placements or not datasets:

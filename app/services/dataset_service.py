@@ -17,7 +17,7 @@ from pandas.api.types import (
 
 from app.utils.path_utils import is_safe_path_segment, resolve_user_item_dir
 
-# Загрузка dataset на бэкенд и извлечение мета данных (названий колонок)
+# Upload a dataset to the backend and extract metadata (column names)
 
 DATASETS_DIR = Path("storage/datasets")
 
@@ -70,11 +70,11 @@ def _meta_file(user_id: str, dataset_id: str) -> Path:
 
 def detect_file_encoding(file_path: Path, sample_size: int = 65536) -> str:
     """
-    Полноценное автоматическое определение кодировки:
-    1. Сигнатуры BOM (utf-8-sig, utf-16-le, utf-16-be)
-    2. Fast-path для валидного UTF-8
-    3. Универсальный детектор charset-normalizer
-    4. Запасной fallback на случай повреждённых данных
+    Full automatic encoding detection:
+    1. BOM signatures (utf-8-sig, utf-16-le, utf-16-be)
+    2. Fast-path for valid UTF-8
+    3. Universal charset-normalizer detector
+    4. Fallback for corrupted data
     """
     with file_path.open("rb") as f:
         raw = f.read(sample_size)
@@ -82,7 +82,7 @@ def detect_file_encoding(file_path: Path, sample_size: int = 65536) -> str:
     if not raw:
         return "utf-8"
 
-    # 1. Проверка сигнатур BOM (критично для Excel выгрузок)
+    # 1. Check BOM signatures (critical for Excel exports)
     if raw.startswith(b"\xef\xbb\xbf"):
         return "utf-8-sig"
     if raw.startswith(b"\xff\xfe"):
@@ -90,22 +90,22 @@ def detect_file_encoding(file_path: Path, sample_size: int = 65536) -> str:
     if raw.startswith(b"\xfe\xff"):
         return "utf-16-be"
 
-    # 2. проверка строгого UTF-8
+    # 2. Check strict UTF-8
     try:
         raw.decode("utf-8")
         return "utf-8"
     except UnicodeDecodeError:
         pass
 
-    # 3. Универсальное статистическое распознавание
+    # 3. Universal statistical detection
     try:
         import charset_normalizer
         matches = charset_normalizer.from_bytes(raw)
         best = matches.best()
         if best and best.encoding:
             enc = best.encoding.lower()
-            # mac_cyrillic — частый ложноположительный артефакт charset-normalizer на кириллице:
-            # в реальных системах (Excel, 1C) это всегда Windows-1251 (CP1251)
+            # mac_cyrillic is a common false-positive artifact of charset-normalizer on Cyrillic text:
+            # in real-world systems (Excel, 1C) it is always Windows-1251 (CP1251)
             if "mac" in enc and "cyrillic" in enc:
                 return "cp1251"
             try:
@@ -115,7 +115,7 @@ def detect_file_encoding(file_path: Path, sample_size: int = 65536) -> str:
     except Exception:
         pass
 
-    # 4. Резервный fallback при сильном повреждении файла
+    # 4. Fallback when the file is heavily corrupted
     try:
         raw.decode("cp1251")
         return "cp1251"
@@ -123,8 +123,8 @@ def detect_file_encoding(file_path: Path, sample_size: int = 65536) -> str:
         pass
 
     raise ValueError(
-        f"Не удалось автоматически определить кодировку файла '{file_path.name}'. "
-        "Пожалуйста, выберите кодировку вручную при загрузке датасета."
+        f"Failed to automatically detect encoding for file '{file_path.name}'. "
+        "Please select the encoding manually when uploading the dataset."
     )
 
 
@@ -139,29 +139,29 @@ def save_dataset(
 ) -> dict:
     dataset_id = str(uuid.uuid4())
 
-    # Создание новой папки с датасетом
+    # Create a new folder for the dataset
     dataset_dir = _dataset_dir(user_id, dataset_id)
 
-    # Берём расширение файла из оригинального названия файла
+    # Extract the file extension from the original filename
     original_filename = file.filename or "data.csv"
     ext = Path(original_filename).suffix.lower() or ".csv"
 
-    # Берём название датасета, введённое пользователем, и очищаем от недопустимых символов
+    # Take the user-provided dataset name and sanitize invalid characters
     raw_name = custom_name.strip() if custom_name and custom_name.strip() else Path(original_filename).stem
     clean_name = re.sub(r'[\\/*?:"<>|]', "_", raw_name).strip() or "dataset"
     file_name = f"{clean_name}{ext}"
 
-    # Получаем пути к файлу данных и файлу метаданных через хелперы
+    # Get paths to the data file and metadata file via helpers
     data_path = _data_file(user_id, dataset_id, file_name)
     meta_path = _meta_file(user_id, dataset_id)
 
-    # Определяем формат файла
+    # Determine the file format
     file_format = "excel" if ext in [".xlsx", ".xls"] else ("tsv" if ext == ".tsv" else "csv")
 
     try:
         dataset_dir.mkdir(parents=True, exist_ok=True)
 
-        # Сохраняем физический файл на диск
+        # Save the physical file to disk
         with data_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
@@ -171,7 +171,7 @@ def save_dataset(
             with pd.ExcelFile(data_path) as excel_file:
                 available_sheets = excel_file.sheet_names
                 if not available_sheets:
-                    raise ValueError("Книга Excel не содержит листов")
+                    raise ValueError("Excel workbook contains no sheets")
 
                 if not sheet_name or sheet_name not in available_sheets:
                     selected_sheet: str | int = available_sheets[0]
@@ -179,17 +179,17 @@ def save_dataset(
                 else:
                     selected_sheet = sheet_name
 
-                # Считываем сэмпл 100 строк для фиксации колонок и типов
+                # Read a 100-row sample to capture columns and types
                 df_sample = pd.read_excel(excel_file, sheet_name=selected_sheet, nrows=100)
         else:
             sheet_name = None
 
             if not encoding or encoding == "auto":
-                # Автоопределение кодировки источника данных
+                # Auto-detect the data source encoding
                 encoding = detect_file_encoding(data_path)
 
             if not delimiter or delimiter == "auto":
-                # Автоопределение разделителя сниффером Python
+                # Auto-detect the delimiter using Python's CSV sniffer
                 try:
                     with data_path.open("r", encoding=encoding, errors="ignore") as f:
                         sample = "".join([f.readline() for _ in range(5)])
@@ -201,16 +201,16 @@ def save_dataset(
             df_sample = pd.read_csv(data_path, sep=delimiter, encoding=encoding, nrows=100)
     except Exception as error:
         shutil.rmtree(dataset_dir, ignore_errors=True)
-        raise ValueError(f"Ошибка чтения структуры файла: {error}") from error
+        raise ValueError(f"Failed to read file structure: {error}") from error
 
-    # Вычисляем колонки и типы один раз при сохранении
+    # Compute columns and types once on save
     fields = [str(col) for col in df_sample.columns]
     field_types = {
         str(field): _infer_field_type(df_sample[field])
         for field in df_sample.columns
     }
 
-    # Паспорт схемы датасета
+    # Dataset schema metadata
     meta = {
         "datasetId": dataset_id,
         "userId": user_id,
@@ -296,9 +296,9 @@ def get_dataset_preview(
             else:
                 dataframe = pd.read_csv(path, encoding=encoding, nrows=safe_limit)
     except Exception as error:
-        raise ValueError(f"Не удалось прочитать датасет: {error}") from error
+        raise ValueError(f"Failed to read dataset: {error}") from error
 
-    # Колонки и типы берем из meta.json
+    # Read columns and types from meta.json
     fields = meta.get("fields") or [str(col) for col in dataframe.columns]
     field_types = meta.get("fieldTypes") or {
         str(field): _infer_field_type(dataframe[field])
@@ -329,11 +329,11 @@ def delete_dataset(user_id: str, dataset_id: str) -> bool:
 def inspect_excel_sheets(file: UploadFile) -> list[str]:
     ext = Path(file.filename or "").suffix.lower()
     if ext not in [".xlsx", ".xls"]:
-        raise ValueError("Файл не является книгой Excel (.xlsx, .xls)")
+        raise ValueError("File is not an Excel workbook (.xlsx, .xls)")
     try:
         excel = pd.ExcelFile(file.file)
         sheets = excel.sheet_names
-        file.file.seek(0)  # Сбрасываем указатель файла в начало
+        file.file.seek(0)  # Reset file pointer to the beginning
         return [str(sheet) for sheet in sheets]
     except Exception as error:
-        raise ValueError(f"Не удалось прочитать структуру Excel: {error}") from error
+        raise ValueError(f"Failed to read Excel structure: {error}") from error

@@ -20,11 +20,11 @@ SECRET_KEY = os.getenv(
     "59438908cf083f26877e255a08ee838128afdcd2f419364c7eab7a7a32cfd3f2",
 )
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # Неделя жизни токена
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # One-week token lifetime
 
 # Auth scheme
-# tokenUrl указывает на маршрут получения токена. Роуты авторизации подключены с префиксом /auth,
-# поэтому указываем полный путь /auth/token чтобы Swagger Authorize работал корректно.
+# tokenUrl points to the token endpoint. Auth routes are mounted with the /auth prefix,
+# so we specify the full /auth/token path for Swagger Authorize to work properly.
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
 
 # Password hashing configs
@@ -97,7 +97,7 @@ def _save_users(users: dict[str, dict]) -> None:
         json.dump(users, f, ensure_ascii=False, indent=2)
 
 
-# Создание токена для дальнейшей аутентефикации по нему
+# Create an access token for subsequent authentication
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
     if expires_delta:
@@ -108,7 +108,7 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-# Получения пользователя после проверки правильности введённого email и пароля
+# Retrieve user after verifying the provided email and password
 def authenticate_user(db, email: str, password: str):
     user = get_user_by_email(db, email)
     if not user:
@@ -119,7 +119,7 @@ def authenticate_user(db, email: str, password: str):
         return False
     return user
 
-# Получение пользователя по токену
+# Retrieve user by token
 async def get_current_user_by_token(token: Annotated[str, Depends(oauth2_scheme)]):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -128,7 +128,7 @@ async def get_current_user_by_token(token: Annotated[str, Depends(oauth2_scheme)
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        # Извлекается id текущего пользователя, зашитый в токен
+        # Extract the current user's id embedded in the token
         user_id = payload.get("sub")
         if user_id is None:
             raise credentials_exception
@@ -151,7 +151,7 @@ async def get_current_user_by_token(token: Annotated[str, Depends(oauth2_scheme)
         disabled=user.disabled,
     )
 
-# Получение только активного на данный момент пользователя
+# Retrieve only a currently active user
 async def get_current_active_user(
         current_user: Annotated[User, Depends(get_current_user_by_token)],
 ):
@@ -159,7 +159,7 @@ async def get_current_active_user(
         raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
 
-# Вход пользователя для формирования токена, с которым он дальше будет аутентефицироваться
+# Log in a user to issue a token for subsequent authentication
 def login_user(email: str, password: str) -> Token:
     users = _load_users()
     user = authenticate_user(db=users, email=email, password=password)
@@ -177,7 +177,7 @@ def login_user(email: str, password: str) -> Token:
     )
 
 
-# Регистрация нового пользователя
+# Register a new user
 def register_user(email: str, password: str, name: str | None = None) -> User:
     email = email.strip().lower()
     name = name.strip() if name else None
@@ -208,7 +208,7 @@ def register_user(email: str, password: str, name: str | None = None) -> User:
         "disabled": False,
     }
 
-    # Добавление нового сформированного пользователя в общий файл со всеми пользователями
+    # Add the newly created user to the shared users file
     users[user_id] = user_dict
     _save_users(users)
 

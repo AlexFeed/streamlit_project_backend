@@ -7,7 +7,7 @@ from app.services import auth_service, project_service
 
 router = APIRouter(prefix="/projects")
 
-# УПРАВЛЕНИЕ ПРОЕКТАМИ
+# PROJECT MANAGEMENT
 @router.get("")
 def list_projects(current_user: Annotated[auth_service.User, Depends(auth_service.get_current_active_user)]):
     return project_service.list_projects(current_user.id)
