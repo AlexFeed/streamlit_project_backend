@@ -1,13 +1,14 @@
 import base64
 import binascii
 import json
-import uuid
-from datetime import datetime, UTC
 import shutil
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from app.schemas.dashboard import validate_dashboard_schema
-from app.services import dataset_service
+from app.utils.path_utils import is_safe_path_segment, resolve_user_item_dir
 
 PROJECTS_DIR = Path("storage/projects")
 MAX_PREVIEW_IMAGE_BYTES = 4 * 1024 * 1024
@@ -21,8 +22,15 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+def _resolve_project_dir(user_id: str, project_id: str) -> Path | None:
+    return resolve_user_item_dir(PROJECTS_DIR, user_id, project_id)
+
+
 def _project_dir(user_id: str, project_id: str) -> Path:
-    return PROJECTS_DIR / user_id / project_id
+    project_dir = _resolve_project_dir(user_id, project_id)
+    if project_dir is None:
+        raise ValueError("Invalid project identifier")
+    return project_dir
 
 
 def _project_file(user_id: str, project_id: str) -> Path:
@@ -37,6 +45,8 @@ def _validate_preview_image(value: object) -> str | None:
 
     try:
         header, encoded_image = value.split(",", maxsplit=1)
+        if not header.startswith("data:") or not header.endswith(";base64"):
+            raise ValueError("Preview image must be a base64 data URL")
         media_type = header.removeprefix("data:").removesuffix(";base64")
         expected_signature = PREVIEW_IMAGE_TYPES.get(media_type)
         if expected_signature is None:
@@ -108,7 +118,10 @@ def create_project(user_id: str, payload: dict) -> dict:
 
 
 def get_project(user_id: str, project_id: str) -> dict | None:
-    path = _project_file(user_id, project_id)
+    project_dir = _resolve_project_dir(user_id, project_id)
+    if project_dir is None:
+        return None
+    path = project_dir / "project.json"
 
     if not path.exists():
         return None
@@ -150,7 +163,7 @@ def update_project(user_id: str, project_id: str, payload: dict) -> dict | None:
 
     project["previewImage"] = preview_image
     if isinstance(project["editorState"], dict):
-        editor_state = dict(project["editorState"])
+        editor_state: dict[str, Any] = dict(project["editorState"])
         if preview_image:
             editor_state["previewImage"] = preview_image
         else:
@@ -174,6 +187,8 @@ def update_project(user_id: str, project_id: str, payload: dict) -> dict | None:
 
 
 def list_projects(user_id: str) -> list[dict]:
+    if not is_safe_path_segment(user_id):
+        return []
     user_dir = PROJECTS_DIR / user_id
     user_dir.mkdir(parents=True, exist_ok=True)
 
@@ -214,9 +229,9 @@ def list_projects(user_id: str) -> list[dict]:
 
 
 def delete_project(user_id: str, project_id: str) -> bool:
-    project_dir = _project_dir(user_id, project_id)
+    project_dir = _resolve_project_dir(user_id, project_id)
 
-    if not project_dir.exists():
+    if project_dir is None or not project_dir.exists():
         return False
 
     shutil.rmtree(project_dir)

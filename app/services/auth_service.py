@@ -1,17 +1,16 @@
 import json
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from pydantic import BaseModel
 from typing import Annotated
 
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from fastapi import FastAPI, Depends, HTTPException, status
-
-from pwdlib import PasswordHash
 import jwt
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
 from jwt.exceptions import InvalidTokenError
+from pwdlib import PasswordHash
+from pydantic import BaseModel
 
 # Auth config
 USERS_FILE = Path("storage/users/users.json")
@@ -102,9 +101,9 @@ def _save_users(users: dict[str, dict]) -> None:
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
+        expire = datetime.now(UTC) + expires_delta
     else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+        expire = datetime.now(UTC) + timedelta(minutes=15)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
@@ -133,15 +132,24 @@ async def get_current_user_by_token(token: Annotated[str, Depends(oauth2_scheme)
         user_id = payload.get("sub")
         if user_id is None:
             raise credentials_exception
-        token_data = TokenData(user_id = user_id)
-    except InvalidTokenError:
+        token_data = TokenData(user_id=user_id)
+    except InvalidTokenError as error:
+        raise credentials_exception from error
+
+    if token_data.user_id is None:
         raise credentials_exception
 
     users = _load_users()
     user = get_user_by_id(db=users, user_id=token_data.user_id)
     if user is None:
         raise credentials_exception
-    return user
+    return User(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        createdAt=user.createdAt,
+        disabled=user.disabled,
+    )
 
 # Получение только активного на данный момент пользователя
 async def get_current_active_user(
@@ -170,7 +178,7 @@ def login_user(email: str, password: str) -> Token:
 
 
 # Регистрация нового пользователя
-def register_user(email: str, password: str, name: str | None = None) -> dict:
+def register_user(email: str, password: str, name: str | None = None) -> User:
     email = email.strip().lower()
     name = name.strip() if name else None
 
@@ -190,13 +198,13 @@ def register_user(email: str, password: str, name: str | None = None) -> dict:
         raise ValueError("User already exists")
 
 
-    user_id =str(uuid.uuid4())
+    user_id = str(uuid.uuid4())
     user_dict = {
         "id": user_id,
         "email": email,
         "name": name,
         "passwordHash": get_password_hash(password),
-        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "createdAt": datetime.now(UTC).isoformat(),
         "disabled": False,
     }
 

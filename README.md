@@ -88,6 +88,20 @@ Suitable for developers who want to run and extend the API, schema validation, o
    python -B -m unittest discover -s tests -v
    ```
 
+7. Install linting/type-checking tools and git hooks (optional, for development):
+   ```bash
+   pip install -r requirements-dev.txt
+   pre-commit install
+   pre-commit install --hook-type pre-push
+   ```
+   *(Git hooks run `ruff` and `pyright` on `git commit`, and `unittest` on `git push`.)*
+
+   Manual checks:
+   ```bash
+   ruff check app tests
+   pyright
+   ```
+
 ---
 
 ## 🏗 Architecture & Storage
@@ -802,7 +816,7 @@ app/
 ├── schemas/
 │   └── dashboard.py              → Pydantic v2 models & Dashboard Schema v2 validation
 ├── utils/
-│   ├── data_transform.py         → Pandas filtering, aggregations, sorting, and metric calculations
+│   ├── path_utils.py             → path traversal guards for user storage directories
 │   └── schema_utils.py           → schema helpers and string literal utilities
 └── services/
     ├── auth_service.py           → JWT, Argon2 hashing, storage/users/users.json

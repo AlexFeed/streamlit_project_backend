@@ -10,3 +10,7 @@ __pycache__/
 storage/
 tests/
 package-lock.json
+requirements-dev.txt
+pyproject.toml
+.pre-commit-config.yaml
+.ruff_cache/

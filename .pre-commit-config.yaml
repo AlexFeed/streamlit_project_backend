@@ -1,0 +1,26 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff check
+        entry: ruff check app tests
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: pyright
+        name: pyright
+        entry: pyright
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: unittest
+        name: unittest
+        entry: python -B -m unittest discover -s tests -v
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

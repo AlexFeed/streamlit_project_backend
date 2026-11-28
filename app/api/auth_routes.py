@@ -1,8 +1,7 @@
 from typing import Annotated
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, Depends
-from fastapi.responses import PlainTextResponse, StreamingResponse
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 
 # Services
@@ -19,21 +18,24 @@ class PasswordChangePayload(BaseModel):
 # УПРАВЛЕНИЕ LOGIN
 @router.post("/register")
 def register(payload: dict):
+    email = payload.get("email")
+    password = payload.get("password")
+    name = payload.get("name")
     try:
         return auth_service.register_user(
-            email=payload.get("email", ""),
-            password=payload.get("password", ""),
-            name=payload.get("name"),
+            email=email if isinstance(email, str) else "",
+            password=password if isinstance(password, str) else "",
+            name=name if isinstance(name, str) else None,
         )
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 @router.post("/token")
 async def login(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]):
     # В этом случае form_data.username хранит email пользователя
     return auth_service.login_user(email=form_data.username, password=form_data.password)
 
-@router.get("/me")
+@router.get("/me", response_model=auth_service.User)
 def auth_me(current_user: Annotated[auth_service.User, Depends(auth_service.get_current_active_user)]):
     return current_user
 
@@ -53,6 +55,6 @@ def change_password(
             new_password=payload.newPassword,
         )
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
     return {"message": "Password changed successfully"}

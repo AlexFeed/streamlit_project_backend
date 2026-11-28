@@ -1,5 +1,6 @@
 import html
 import math
+from typing import Any, cast
 
 import pandas as pd
 import streamlit as st
@@ -158,7 +159,7 @@ def prepare_chart_data(dataframe, x, y, aggregation="none", sort_order="none", s
     return chart_df
 
 
-def calculate_metric(dataframe, field, aggregation="sum"):
+def calculate_metric(dataframe, field, aggregation="sum") -> Any:
     if not field or field not in dataframe.columns:
         raise KeyError(field)
     if aggregation == "count":
@@ -172,9 +173,9 @@ def calculate_metric(dataframe, field, aggregation="sum"):
     return result.item() if hasattr(result, "item") else result
 
 
-def numeric_series(series):
+def numeric_series(series: Any) -> pd.Series:
     if pd.api.types.is_numeric_dtype(series):
-        return pd.to_numeric(series, errors="coerce")
+        return cast(pd.Series, pd.to_numeric(series, errors="coerce"))
     normalized = (
         series.astype("string")
         .str.strip()
@@ -182,7 +183,7 @@ def numeric_series(series):
         .str.replace("\u00a0", "", regex=False)
         .str.replace(",", ".", regex=False)
     )
-    return pd.to_numeric(normalized, errors="coerce")
+    return cast(pd.Series, pd.to_numeric(normalized, errors="coerce"))
 
 
 def format_metric(value):
@@ -766,6 +767,7 @@ def prepare_plot_frame(view, dataframe):
             chart_df = chart_df.dropna(subset=["__y"])
         if aggregation != "none":
             chart_df = chart_df.groupby("__x", as_index=False, dropna=False, sort=False)["__y"].agg(aggregation)
+            assert isinstance(chart_df, pd.DataFrame)
         if sort_order != "none":
             chart_df = chart_df.sort_values(
                 by="__y" if sort_by == "y" else "__x",
@@ -1389,7 +1391,7 @@ def render_tab_group(component, schema, datasets, filtered_datasets, navigation_
             grouped=True,
         )
 
-    for tab, tab_container in zip(tabs, tab_containers):
+    for tab, tab_container in zip(tabs, tab_containers, strict=False):
         tab_id = tab.get("id")
         with tab_container:
             tab_children = [
@@ -1420,7 +1422,7 @@ def render_tab_group(component, schema, datasets, filtered_datasets, navigation_
             row_height = max(120, usable_height // max(1, len(rows)))
             for row in rows:
                 columns = st.columns([width for _, width in row], gap="small")
-                for column, (child, _) in zip(columns, row):
+                for column, (child, _) in zip(columns, row, strict=False):
                     with column:
                         render_tab_child(child, row_height)
 

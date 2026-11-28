@@ -1,4 +1,4 @@
-from typing import Annotated, Literal, Union
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -298,7 +298,7 @@ class TabGroupView(ComponentBase):
 
 
 DashboardView = Annotated[
-    Union[ChartView, MetricView, ProgressView, TextView, PageLinkView, TableView, LayoutGroupView, TabGroupView],
+    ChartView | MetricView | ProgressView | TextView | PageLinkView | TableView | LayoutGroupView | TabGroupView,
     Field(discriminator="type"),
 ]
 
@@ -313,7 +313,7 @@ class DashboardSchema(BaseModel):
         min_length=1,
     )
     data_sources: list[DataSource] = Field(alias="dataSources", min_length=1)
-    filters: list[Annotated[Union[SelectboxFilter, DataControlFilter], Field(discriminator="type")]] = Field(default_factory=list)
+    filters: list[Annotated[SelectboxFilter | DataControlFilter, Field(discriminator="type")]] = Field(default_factory=list)
     views: list[DashboardView] = Field(default_factory=list)
 
     @field_validator("filters", "views")

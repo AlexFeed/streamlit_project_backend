@@ -21,7 +21,7 @@ def create_project(
     try:
         return project_service.create_project(current_user.id, payload)
     except (ValidationError, ValueError) as error:
-        raise HTTPException(status_code=422, detail=str(error))
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @router.get("/{project_id}")
@@ -50,7 +50,7 @@ def update_project(
             payload,
         )
     except (ValidationError, ValueError) as error:
-        raise HTTPException(status_code=422, detail=str(error))
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")

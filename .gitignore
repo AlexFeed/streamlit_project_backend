@@ -6,6 +6,10 @@ __pycache__/
 
 # venv
 venv/
+.venv/
+
+# linters
+.ruff_cache/
 
 # OS
 .DS_Store
