@@ -87,13 +87,9 @@ async def delete_dataset(
     return {"deleted": True}
 
 # Load all sheets from an Excel file
-@router.post("/inspect-sheets")
+@router.post("/inspect-sheets", dependencies=[Depends(auth_service.get_current_active_user)])
 async def inspect_sheets(
-        current_user: Annotated[
-            auth_service.User,
-            Depends(auth_service.get_current_active_user),
-        ],
-        file: UploadFile = File(...),
+        file: UploadFile = File(...)
 ):
     try:
         sheets = dataset_service.inspect_excel_sheets(file)

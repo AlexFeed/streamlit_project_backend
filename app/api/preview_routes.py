@@ -3,8 +3,8 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import ValidationError
 
+from app.schemas.dashboard import DashboardSchemaPayload
 from app.services import auth_service
 from app.services.preview_service import PreviewNotFoundError, preview_service
 
@@ -13,23 +13,17 @@ router = APIRouter(prefix="/preview")
 
 @router.post("")
 def create_preview(
-        payload: dict,
+        payload: DashboardSchemaPayload,
         current_user: Annotated[
             auth_service.User,
             Depends(auth_service.get_current_active_user),
         ],
 ):
-    schema = payload.get("schema")
-    if not isinstance(schema, dict):
-        raise HTTPException(status_code=400, detail="Schema is required")
-
     try:
         return preview_service.create_preview(
             user_id=current_user.id,
-            schema=schema,
+            schema=payload.dashboard_schema.model_dump(by_alias=True),
         )
-    except ValidationError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -37,24 +31,18 @@ def create_preview(
 @router.put("/{session_id}")
 def update_preview(
         session_id: str,
-        payload: dict,
+        payload: DashboardSchemaPayload,
         current_user: Annotated[
             auth_service.User,
             Depends(auth_service.get_current_active_user),
         ],
 ):
-    schema = payload.get("schema")
-    if not isinstance(schema, dict):
-        raise HTTPException(status_code=400, detail="Schema is required")
-
     try:
         return preview_service.update_preview(
             session_id=session_id,
             user_id=current_user.id,
-            schema=schema,
+            schema=payload.dashboard_schema.model_dump(by_alias=True),
         )
-    except ValidationError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
     except PermissionError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
     except PreviewNotFoundError as error:

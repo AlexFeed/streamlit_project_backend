@@ -1,8 +1,64 @@
+import io
+import zipfile
+from pathlib import Path
+
+from app.services import dataset_service
 from app.services.renderers.export_render import render_export_dashboard_code
 from app.utils.schema_utils import (
     get_dashboard_title,
     python_string_literal,
 )
+
+BASE_REQUIREMENTS = "streamlit>=1.57\npandas>=2.2\n"
+EXCEL_REQUIREMENTS = f"{BASE_REQUIREMENTS}openpyxl>=3.1\n"
+
+# Helpful files for users who download and run locally
+EXPORT_README_MD = r"""
+# Downloaded dashboard
+
+This archive contains a generated Streamlit dashboard. To run locally:
+
+1. Create a Python virtual environment (recommended):
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1  # PowerShell
+# or .venv\Scripts\activate  # CMD
+```
+
+2. Install dependencies:
+
+```powershell
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+3. Run the app:
+
+```powershell
+python -m streamlit run app.py --server.port 8501
+```
+
+If you prefer a one-click script, use `run_local.bat` (Windows) or `run_local.sh` (Linux/macOS).
+""".lstrip("\n")
+
+EXPORT_RUN_LOCAL_BAT = """\
+@echo off
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m streamlit run app.py --server.port 8501
+"""
+
+EXPORT_RUN_LOCAL_SH = """\
+#!/usr/bin/env bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m streamlit run app.py --server.port 8501
+"""
+
+
+class DatasetNotFoundError(LookupError):
+    """Raised when a referenced dataset does not exist for the current user."""
 
 
 def generate_imports() -> list[str]:
@@ -78,3 +134,54 @@ def generate_streamlit_code(schema: dict) -> str:
     code.extend(render_export_dashboard_code(schema))
 
     return "\n".join(code)
+
+
+def _build_requirements_txt(dataset_files: list[tuple[Path, str]]) -> str:
+    has_excel = any(
+        file_name.lower().endswith((".xlsx", ".xls"))
+        for _, file_name in dataset_files
+    )
+    return EXCEL_REQUIREMENTS if has_excel else BASE_REQUIREMENTS
+
+
+def build_dashboard_zip(user_id: str, schema: dict) -> io.BytesIO:
+    data_sources = schema.get("dataSources") or []
+    if not data_sources:
+        raise ValueError("dataSources are required")
+
+    used_names: set[str] = set()
+    dataset_files: list[tuple[Path, str]] = []
+    export_sources: list[dict] = []
+
+    for ds in data_sources:
+        dataset_id = ds.get("datasetId")
+        if not dataset_id:
+            raise ValueError("datasetId is required")
+
+        dataset_path = dataset_service.get_dataset_path(user_id, dataset_id)
+        dataset_meta = dataset_service.get_dataset_meta(user_id, dataset_id)
+        if not dataset_path or not dataset_meta:
+            raise DatasetNotFoundError("Dataset not found")
+
+        file_name = dataset_meta["name"]
+        if file_name in used_names:
+            file_name = f"{dataset_id}_{file_name}"
+        used_names.add(file_name)
+
+        export_sources.append({**ds, "name": file_name})
+        dataset_files.append((dataset_path, file_name))
+
+    code = generate_streamlit_code({**schema, "dataSources": export_sources})
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        zip_file.writestr("app.py", code)
+        for dataset_path, file_name in dataset_files:
+            zip_file.write(dataset_path, f"data/{file_name}")
+        zip_file.writestr("requirements.txt", _build_requirements_txt(dataset_files))
+        zip_file.writestr("README.md", EXPORT_README_MD)
+        zip_file.writestr("run_local.bat", EXPORT_RUN_LOCAL_BAT)
+        zip_file.writestr("run_local.sh", EXPORT_RUN_LOCAL_SH)
+
+    buffer.seek(0)
+    return buffer

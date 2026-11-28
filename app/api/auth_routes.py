@@ -10,6 +10,12 @@ from app.services import auth_service
 router = APIRouter(prefix="/auth")
 
 
+class RegisterPayload(BaseModel):
+    email: str
+    password: str
+    name: str | None = None
+
+
 class PasswordChangePayload(BaseModel):
     currentPassword: str
     newPassword: str
@@ -17,15 +23,12 @@ class PasswordChangePayload(BaseModel):
 
 # LOGIN MANAGEMENT
 @router.post("/register")
-def register(payload: dict):
-    email = payload.get("email")
-    password = payload.get("password")
-    name = payload.get("name")
+def register(payload: RegisterPayload):
     try:
         return auth_service.register_user(
-            email=email if isinstance(email, str) else "",
-            password=password if isinstance(password, str) else "",
-            name=name if isinstance(name, str) else None,
+            email=payload.email,
+            password=payload.password,
+            name=payload.name,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error

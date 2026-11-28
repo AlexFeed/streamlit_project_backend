@@ -136,6 +136,11 @@ class GenerateZipRouteTests(unittest.TestCase):
             self.assertIn("streamlit", requirements)
             self.assertIn("pandas", requirements)
             self.assertNotIn("openpyxl", requirements)
+            self.assertTrue(
+                archive.read("run_local.sh")
+                .decode("utf-8")
+                .startswith("#!/usr/bin/env bash\n")
+            )
 
     def test_excel_export_includes_openpyxl_and_sheet_name(self):
         meta = self._save_excel(
@@ -212,9 +217,9 @@ class GenerateZipRouteTests(unittest.TestCase):
 
     # --- Validation, missing resources, and user isolation ---
 
-    def test_rejects_missing_schema_with_400(self):
+    def test_rejects_missing_schema_with_422(self):
         response = self._make_client("user-1").post("/generate", json={})
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 422)
 
     def test_rejects_invalid_schema_with_422(self):
         response = self._make_client("user-1").post(
@@ -268,6 +273,43 @@ class GenerateZipRouteTests(unittest.TestCase):
     def test_unauthenticated_generate_returns_401(self):
         response = self._make_client(user_id=None).post("/generate", json={})
         self.assertEqual(response.status_code, 401)
+
+    def test_build_dashboard_zip_raises_domain_errors_and_keeps_input_unchanged(self):
+        from app.services.generator_service import (
+            DatasetNotFoundError,
+            build_dashboard_zip,
+        )
+
+        with self.assertRaises(ValueError):
+            build_dashboard_zip("user-1", {"dataSources": []})
+
+        with self.assertRaises(DatasetNotFoundError):
+            build_dashboard_zip(
+                "user-1",
+                make_export_schema(
+                    [{"type": "backend_dataset", "datasetId": "missing"}]
+                ),
+            )
+
+        first = self._save_csv("user-1", "sales.csv", b"region,sales\nA,10\n")
+        second = self._save_csv("user-1", "sales.csv", b"region,sales\nB,20\n")
+        schema = make_export_schema(
+            [
+                {
+                    "type": "backend_dataset",
+                    "datasetId": first["datasetId"],
+                    "name": "original.csv",
+                },
+                {
+                    "type": "backend_dataset",
+                    "datasetId": second["datasetId"],
+                    "name": "original.csv",
+                },
+            ]
+        )
+
+        build_dashboard_zip("user-1", schema)
+        self.assertEqual(schema["dataSources"][1]["name"], "original.csv")
 
 
 if __name__ == "__main__":
