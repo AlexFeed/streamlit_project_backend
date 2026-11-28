@@ -202,6 +202,17 @@ class ProjectRoutesTests(unittest.TestCase):
             "Initial",
         )
 
+        # Partial update omitting schema/previewImage must preserve them
+        renamed = owner_client.put(
+            f"/projects/{project_id}",
+            json={"title": "Renamed"},
+        )
+        self.assertEqual(renamed.status_code, 200)
+        renamed_body = renamed.json()
+        self.assertEqual(renamed_body["title"], "Renamed")
+        self.assertEqual(renamed_body["previewImage"], JPEG_PREVIEW)
+        self.assertEqual(renamed_body["schema"]["dashboard"]["title"], "Initial")
+
         # Valid partial update clears previewImage & schema explicitly
         cleared = owner_client.put(
             f"/projects/{project_id}",
@@ -409,6 +420,72 @@ class ProjectPreviewStorageTests(unittest.TestCase):
                     "previewImage": "data:image/svg+xml;base64,PHN2Zz4=",
                 },
             )
+
+
+class RequestValidationHandlerTests(unittest.TestCase):
+    def _make_client(self) -> TestClient:
+        from fastapi.exceptions import RequestValidationError
+
+        from app.api.auth_routes import router as auth_router
+        from app.main import request_validation_exception_handler
+
+        app = FastAPI()
+        app.add_exception_handler(
+            RequestValidationError,
+            request_validation_exception_handler,  # type: ignore[arg-type]
+        )
+        app.include_router(auth_router)
+        app.include_router(projects_router)
+        app.dependency_overrides[auth_service.get_current_active_user] = lambda: (
+            auth_service.User(id="user-1", email="user-1@example.com")
+        )
+        return TestClient(app)
+
+    def test_formats_missing_fields_and_model_validator_value_errors_as_string(self):
+        from fastapi.exceptions import RequestValidationError
+
+        from app.main import app as main_app
+        from app.main import request_validation_exception_handler
+
+        self.assertIs(
+            main_app.exception_handlers.get(RequestValidationError),
+            request_validation_exception_handler,
+        )
+
+        client = self._make_client()
+
+        missing_resp = client.post("/auth/register", json={"password": "secret123"})
+        self.assertEqual(missing_resp.status_code, 422)
+        missing_body = missing_resp.json()
+        self.assertIsInstance(missing_body["detail"], str)
+        self.assertIn("email:", missing_body["detail"])
+        self.assertIsInstance(missing_body["errors"], list)
+        self.assertEqual(missing_body["errors"][0]["loc"], ["body", "email"])
+
+        # Triggers @model_validator ValueError (raw ctx holds non-JSON ValueError).
+        bad_schema = make_valid_schema()
+        bad_schema["views"][0]["pageId"] = "non-existent-page"
+        validator_resp = client.post("/projects", json={"schema": bad_schema})
+        self.assertEqual(validator_resp.status_code, 422)
+        validator_body = validator_resp.json()
+        self.assertIsInstance(validator_body["detail"], str)
+        self.assertIn("does not exist", validator_body["detail"])
+        self.assertNotIn("Value error, ", validator_body["detail"])
+        self.assertEqual(validator_body["errors"][0]["type"], "value_error")
+
+        overflow_resp = client.post(
+            "/projects",
+            json={
+                "title": 1,
+                "description": 2,
+                "previewImage": 3,
+                "datasets": "not-a-list",
+            },
+        )
+        self.assertEqual(overflow_resp.status_code, 422)
+        overflow_body = overflow_resp.json()
+        self.assertEqual(len(overflow_body["errors"]), 4)
+        self.assertIn("(+1 more)", overflow_body["detail"])
 
 
 if __name__ == "__main__":

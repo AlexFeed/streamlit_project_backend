@@ -9,6 +9,7 @@ FilterWidget = Literal["selectbox", "radio", "segmented", "pills", "multiselect"
 Surface = Literal["none", "soft", "card"]
 DEFAULT_PAGE_ID = "page-main"
 
+# All dashboard components and elements DTOs
 
 class Layout(BaseModel):
     width: int = Field(default=6, ge=1, le=12)
@@ -302,7 +303,7 @@ DashboardView = Annotated[
     Field(discriminator="type"),
 ]
 
-
+# Main dashboard schema dto
 class DashboardSchema(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -336,6 +337,12 @@ class DashboardSchema(BaseModel):
     def charts_must_keep_readable_height(self):
         page_ids = {page.id for page in self.pages}
         components = [*self.filters, *self.views]
+        all_ids = [component.id for component in components]
+
+        # Check if all component ids in filters and views are unique
+        if len(all_ids) != len(set(all_ids)):
+            raise ValueError("Component ids must be unique across dashboard")
+
         groups = {
             component.id: component
             for component in components
@@ -369,14 +376,12 @@ class DashboardSchema(BaseModel):
         return self
 
 
+class DashboardSchemaPayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    # Alias avoids shadowing deprecated BaseModel.schema() in Pydantic v2.
+    dashboard_schema: DashboardSchema = Field(alias="schema")
+
+
 def validate_dashboard_schema(schema: dict) -> dict:
-    validated = DashboardSchema.model_validate(schema)
-
-    all_ids = [
-        component.id
-        for component in [*validated.filters, *validated.views]
-    ]
-    if len(all_ids) != len(set(all_ids)):
-        raise ValueError("Component ids must be unique across dashboard")
-
-    return validated.model_dump(by_alias=True)
+    return DashboardSchema.model_validate(schema).model_dump(by_alias=True)

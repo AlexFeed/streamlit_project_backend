@@ -80,17 +80,22 @@ class AuthTests(unittest.TestCase):
 
     def test_register_rejects_missing_or_short_credentials(self):
         cases = [
-            ("empty_email", {"email": "   ", "password": "secret123"}),
-            ("null_email", {"email": None, "password": "secret123"}),
-            ("empty_password", {"email": "alice@example.com", "password": ""}),
-            ("null_password", {"email": "alice@example.com", "password": None}),
-            ("short_password", {"email": "alice@example.com", "password": "12345"}),
+            ("empty_email", {"email": "   ", "password": "secret123"}, 400),
+            ("null_email", {"email": None, "password": "secret123"}, 422),
+            ("missing_email", {"password": "secret123"}, 422),
+            ("empty_password", {"email": "alice@example.com", "password": ""}, 400),
+            ("null_password", {"email": "alice@example.com", "password": None}, 422),
+            (
+                "short_password",
+                {"email": "alice@example.com", "password": "12345"},
+                400,
+            ),
         ]
 
-        for label, payload in cases:
+        for label, payload, expected_status in cases:
             with self.subTest(case=label):
                 response = self.client.post("/auth/register", json=payload)
-                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.status_code, expected_status)
 
     def test_register_rejects_duplicate_email_case_insensitively(self):
         first = self._register(email="alice@example.com", password="secret123")

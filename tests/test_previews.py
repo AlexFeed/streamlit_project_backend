@@ -156,8 +156,8 @@ class PreviewRoutesTests(unittest.TestCase):
         ).json()["sessionId"]
 
         invalid_cases = [
-            ("missing_schema", {}, 400),
-            ("non_dict_schema", {"schema": "not-a-dict"}, 400),
+            ("missing_schema", {}, 422),
+            ("non_dict_schema", {"schema": "not-a-dict"}, 422),
             ("invalid_schema_v2", {"schema": {"version": 999}}, 422),
             (
                 "empty_data_sources",
