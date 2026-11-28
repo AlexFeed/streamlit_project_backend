@@ -2,12 +2,17 @@ import os
 import time
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from threading import RLock
 from typing import Any
 from urllib.parse import urlencode
 
 from app.schemas.dashboard import validate_dashboard_schema
 from app.services.dataset_service import get_dataset_path
+
+
+class PreviewNotFoundError(ValueError):
+    """Raised when a preview session does not exist or has expired."""
 
 
 class PreviewService:
@@ -75,7 +80,7 @@ class PreviewService:
             session = self._sessions.get(session_id)
 
             if not session:
-                raise ValueError("Preview not found or expired")
+                raise PreviewNotFoundError("Preview not found or expired")
 
             session["expiresAtMonotonic"] = time.monotonic() + self._ttl_seconds
 
@@ -98,7 +103,7 @@ class PreviewService:
         session = self._sessions.get(session_id)
 
         if not session:
-            raise ValueError("Preview not found or expired")
+            raise PreviewNotFoundError("Preview not found or expired")
         if session["userId"] != user_id:
             raise PermissionError("Preview belongs to another user")
 

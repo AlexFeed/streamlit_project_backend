@@ -26,9 +26,9 @@ async def upload_dataset(
             sheet_name=sheet_name,
         )
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
+        raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
-        raise HTTPException(status_code=500, detail=f"Ошибка сохранения датасета: {error}")
+        raise HTTPException(status_code=500, detail=f"Ошибка сохранения датасета: {error}") from error
 
 
 @router.get("/{dataset_id}")
@@ -63,7 +63,7 @@ async def get_dataset_preview(
             limit,
         )
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
     if not preview:
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -99,6 +99,6 @@ async def inspect_sheets(
         sheets = dataset_service.inspect_excel_sheets(file)
         return {"sheets": sheets}
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
+        raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
-        raise HTTPException(status_code=500, detail=f"Ошибка чтения книги Excel: {error}")
+        raise HTTPException(status_code=500, detail=f"Ошибка чтения книги Excel: {error}") from error

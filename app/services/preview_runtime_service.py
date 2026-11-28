@@ -62,19 +62,20 @@ class PreviewRuntimeService:
             stderr=subprocess.DEVNULL,
             creationflags=(
                 subprocess.CREATE_NO_WINDOW
-                if os.name == "nt"
+                if sys.platform == "win32"
                 else 0
             ),
         )
 
     def stop(self) -> None:
-        if self.is_running():
-            self.process.terminate()
+        process = self.process
+        if process is not None and process.poll() is None:
+            process.terminate()
             try:
-                self.process.wait(timeout=5)
+                process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=5)
+                process.kill()
+                process.wait(timeout=5)
             finally:
                 self.process = None
 

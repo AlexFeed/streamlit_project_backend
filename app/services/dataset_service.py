@@ -4,7 +4,7 @@ import json
 import re
 import shutil
 import uuid
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -14,6 +14,8 @@ from pandas.api.types import (
     is_datetime64_any_dtype,
     is_numeric_dtype,
 )
+
+from app.utils.path_utils import is_safe_path_segment, resolve_user_item_dir
 
 # Загрузка dataset на бэкенд и извлечение мета данных (названий колонок)
 
@@ -45,11 +47,20 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+def _resolve_dataset_dir(user_id: str, dataset_id: str) -> Path | None:
+    return resolve_user_item_dir(DATASETS_DIR, user_id, dataset_id)
+
+
 def _dataset_dir(user_id: str, dataset_id: str) -> Path:
-    return DATASETS_DIR / user_id / dataset_id
+    dataset_dir = _resolve_dataset_dir(user_id, dataset_id)
+    if dataset_dir is None:
+        raise ValueError("Invalid dataset identifier")
+    return dataset_dir
 
 
 def _data_file(user_id: str, dataset_id: str, filename: str = "data.csv") -> Path:
+    if not is_safe_path_segment(filename):
+        raise ValueError("Invalid dataset filename")
     return _dataset_dir(user_id, dataset_id) / filename
 
 
@@ -130,7 +141,6 @@ def save_dataset(
 
     # Создание новой папки с датасетом
     dataset_dir = _dataset_dir(user_id, dataset_id)
-    dataset_dir.mkdir(parents=True, exist_ok=True)
 
     # Берём расширение файла из оригинального названия файла
     original_filename = file.filename or "data.csv"
@@ -145,14 +155,16 @@ def save_dataset(
     data_path = _data_file(user_id, dataset_id, file_name)
     meta_path = _meta_file(user_id, dataset_id)
 
-    # Сохраняем физический файл на диск
-    with data_path.open("wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
     # Определяем формат файла
     file_format = "excel" if ext in [".xlsx", ".xls"] else ("tsv" if ext == ".tsv" else "csv")
 
     try:
+        dataset_dir.mkdir(parents=True, exist_ok=True)
+
+        # Сохраняем физический файл на диск
+        with data_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
         if file_format == "excel":
             delimiter = None
             encoding = None
@@ -162,10 +174,13 @@ def save_dataset(
                     raise ValueError("Книга Excel не содержит листов")
 
                 if not sheet_name or sheet_name not in available_sheets:
-                    sheet_name = available_sheets[0]
+                    selected_sheet: str | int = available_sheets[0]
+                    sheet_name = str(selected_sheet)
+                else:
+                    selected_sheet = sheet_name
 
                 # Считываем сэмпл 100 строк для фиксации колонок и типов
-                df_sample = pd.read_excel(excel_file, sheet_name=sheet_name, nrows=100)
+                df_sample = pd.read_excel(excel_file, sheet_name=selected_sheet, nrows=100)
         else:
             sheet_name = None
 
@@ -176,9 +191,9 @@ def save_dataset(
             if not delimiter or delimiter == "auto":
                 # Автоопределение разделителя сниффером Python
                 try:
-                    with data_path.open("r", encoding="utf-8", errors="ignore") as f:
+                    with data_path.open("r", encoding=encoding, errors="ignore") as f:
                         sample = "".join([f.readline() for _ in range(5)])
-                        sniffed = csv.Sniffer().sniff(sample, delimiters=[",", ";", "\t", "|", " "])
+                        sniffed = csv.Sniffer().sniff(sample, delimiters=",;\t| ")
                         delimiter = sniffed.delimiter
                 except Exception:
                     delimiter = ","
@@ -186,7 +201,7 @@ def save_dataset(
             df_sample = pd.read_csv(data_path, sep=delimiter, encoding=encoding, nrows=100)
     except Exception as error:
         shutil.rmtree(dataset_dir, ignore_errors=True)
-        raise ValueError(f"Ошибка чтения структуры файла: {error}")
+        raise ValueError(f"Ошибка чтения структуры файла: {error}") from error
 
     # Вычисляем колонки и типы один раз при сохранении
     fields = [str(col) for col in df_sample.columns]
@@ -217,7 +232,10 @@ def save_dataset(
 
 
 def get_dataset_meta(user_id: str, dataset_id: str) -> dict | None:
-    path = _meta_file(user_id, dataset_id)
+    dataset_dir = _resolve_dataset_dir(user_id, dataset_id)
+    if dataset_dir is None:
+        return None
+    path = dataset_dir / "meta.json"
 
     if not path.exists():
         return None
@@ -227,15 +245,19 @@ def get_dataset_meta(user_id: str, dataset_id: str) -> dict | None:
 
 
 def get_dataset_path(user_id: str, dataset_id: str) -> Path | None:
+    dataset_dir = _resolve_dataset_dir(user_id, dataset_id)
+    if dataset_dir is None:
+        return None
+
     meta = get_dataset_meta(user_id, dataset_id)
     if meta:
         file_name = meta.get("name") or meta.get("storedName")
-        if file_name:
-            path = _data_file(user_id, dataset_id, file_name)
+        if isinstance(file_name, str) and is_safe_path_segment(file_name):
+            path = dataset_dir / file_name
             if path.exists():
                 return path
 
-    fallback_csv = _data_file(user_id, dataset_id, "data.csv")
+    fallback_csv = dataset_dir / "data.csv"
     if fallback_csv.exists():
         return fallback_csv
 
@@ -260,7 +282,11 @@ def get_dataset_preview(
         if file_format == "excel":
             sheet_name = meta.get("sheetName")
             with pd.ExcelFile(path) as excel_file:
-                target_sheet = sheet_name if sheet_name in excel_file.sheet_names else 0
+                target_sheet: str | int = (
+                    sheet_name
+                    if isinstance(sheet_name, str) and sheet_name in excel_file.sheet_names
+                    else 0
+                )
                 dataframe = pd.read_excel(excel_file, sheet_name=target_sheet, nrows=safe_limit)
         else:
             delimiter = meta.get("delimiter")
@@ -270,7 +296,7 @@ def get_dataset_preview(
             else:
                 dataframe = pd.read_csv(path, encoding=encoding, nrows=safe_limit)
     except Exception as error:
-        raise ValueError(f"Не удалось прочитать датасет: {error}")
+        raise ValueError(f"Не удалось прочитать датасет: {error}") from error
 
     # Колонки и типы берем из meta.json
     fields = meta.get("fields") or [str(col) for col in dataframe.columns]
@@ -283,7 +309,7 @@ def get_dataset_preview(
         "fields": fields,
         "fieldTypes": field_types,
         "rows": json.loads(
-            dataframe.to_json(orient="records", date_format="iso")
+            dataframe.to_json(orient="records", date_format="iso") or "[]"
         ),
         "returnedRows": len(dataframe),
         "limit": safe_limit,
@@ -291,9 +317,9 @@ def get_dataset_preview(
 
 
 def delete_dataset(user_id: str, dataset_id: str) -> bool:
-    dataset_dir = _dataset_dir(user_id, dataset_id)
+    dataset_dir = _resolve_dataset_dir(user_id, dataset_id)
 
-    if not dataset_dir.exists():
+    if dataset_dir is None or not dataset_dir.exists():
         return False
 
     shutil.rmtree(dataset_dir)
@@ -308,6 +334,6 @@ def inspect_excel_sheets(file: UploadFile) -> list[str]:
         excel = pd.ExcelFile(file.file)
         sheets = excel.sheet_names
         file.file.seek(0)  # Сбрасываем указатель файла в начало
-        return sheets
+        return [str(sheet) for sheet in sheets]
     except Exception as error:
-        raise ValueError(f"Не удалось прочитать структуру Excel: {error}")
+        raise ValueError(f"Не удалось прочитать структуру Excel: {error}") from error

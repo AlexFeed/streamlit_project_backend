@@ -1,4 +1,5 @@
 import inspect
+
 from app.services.renderers import render_core
 
 # Вызывает render_core для генерации кода и упаковывает его в итоговый app.py файл

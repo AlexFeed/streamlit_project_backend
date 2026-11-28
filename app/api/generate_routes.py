@@ -27,7 +27,7 @@ async def generate_dashboard(payload: dict, current_user: Annotated[
     try:
         validated_schema = validate_dashboard_schema(schema)
     except (ValidationError, ValueError) as error:
-        raise HTTPException(status_code=422, detail=str(error))
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
     data_sources = validated_schema.get("dataSources") or []
     if not data_sources:
@@ -76,7 +76,7 @@ async def generate_dashboard(payload: dict, current_user: Annotated[
         # Helpful files for users who download and run locally
         zip_file.writestr(
             "README.md",
-            """
+            r"""
 # Downloaded dashboard
 
 This archive contains a generated Streamlit dashboard. To run locally:

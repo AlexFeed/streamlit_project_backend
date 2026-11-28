@@ -1,8 +1,7 @@
-from fastapi import FastAPI, Depends, HTTPException, status
-from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-from app.services.preview_runtime_service import preview_runtime_service
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 # Routes
 from app.api.auth_routes import router as auth_router
@@ -10,6 +9,7 @@ from app.api.datasets_routes import router as datasets_router
 from app.api.generate_routes import router as generate_router
 from app.api.preview_routes import router as preview_router
 from app.api.projects_routes import router as projects_router
+from app.services.preview_runtime_service import preview_runtime_service
 
 
 @asynccontextmanager

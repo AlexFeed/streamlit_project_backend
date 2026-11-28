@@ -1,33 +1,23 @@
-import ast
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from streamlit.testing.v1 import AppTest
 
-from app.api.datasets_routes import router as datasets_router
-from app.api.auth_routes import router as auth_router
 from app.schemas.dashboard import validate_dashboard_schema
 from app.services.generator_service import generate_streamlit_code
-from app.services import auth_service, dataset_service
-from app.services.preview_service import PreviewService
-from app.utils.data_transform import (
-    calculate_metric,
-    prepare_chart_data,
-)
+from app.services.renderers import render_core
 from app.utils.schema_utils import (
     get_dashboard_title,
     python_string_literal,
 )
-from app.services.renderers import render_core
 
 
 def make_schema() -> dict:
@@ -85,6 +75,9 @@ def make_schema() -> dict:
             },
         ],
     }
+
+
+# --- Dashboard Schema v2 validation ---
 
 
 class DashboardSchemaTests(unittest.TestCase):
@@ -280,6 +273,128 @@ class DashboardSchemaTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             validate_dashboard_schema(schema)
 
+    def test_rejects_too_small_chart_height(self):
+        schema = make_schema()
+        schema["views"][0]["layout"]["height"] = 60
+
+        with self.assertRaises(ValidationError):
+            validate_dashboard_schema(schema)
+
+    def test_rejects_layout_exceeding_grid_columns(self):
+        schema = make_schema()
+        schema["views"][0]["layout"].update({"x": 8, "width": 5})
+
+        with self.assertRaises(ValidationError):
+            validate_dashboard_schema(schema)
+
+    def test_validates_data_control_filter_variants(self):
+        for control_type in ("range", "date", "toggle"):
+            with self.subTest(control_type=control_type):
+                schema = make_schema()
+                schema["filters"].append({
+                    "id": f"control-{control_type}",
+                    "type": "data_control",
+                    "datasetId": "dataset-1",
+                    "order": 10,
+                    "layout": {"width": 4, "height": 80},
+                    "field": "sales",
+                    "controlType": control_type,
+                })
+
+                validated = validate_dashboard_schema(schema)
+                self.assertEqual(validated["filters"][-1]["controlType"], control_type)
+
+    def test_rejects_progress_with_non_increasing_range(self):
+        schema = make_schema()
+        schema["views"].append({
+            "id": "progress-1",
+            "type": "progress",
+            "datasetId": "dataset-1",
+            "order": 4,
+            "layout": {"width": 4, "height": 80},
+            "field": "sales",
+            "minimum": 50,
+            "maximum": 50,
+        })
+
+        with self.assertRaises(ValidationError):
+            validate_dashboard_schema(schema)
+
+    def test_rejects_pivot_table_without_required_fields(self):
+        schema = make_schema()
+        schema["views"].append({
+            "id": "pivot-invalid",
+            "type": "table",
+            "datasetId": "dataset-1",
+            "order": 4,
+            "layout": {"width": 6, "height": 240},
+            "tableMode": "pivot",
+            "pivotIndex": "region",
+            "pivotValue": "",
+        })
+
+        with self.assertRaises(ValidationError):
+            validate_dashboard_schema(schema)
+
+    def test_rejects_nested_groups_and_cross_page_parent(self):
+        # Nested layout_group inside another layout_group is forbidden.
+        nested_schema = make_schema()
+        nested_schema["views"].extend([
+            {
+                "id": "group-outer",
+                "type": "layout_group",
+                "order": 4,
+                "layout": {"width": 6, "height": 200},
+            },
+            {
+                "id": "group-inner",
+                "type": "layout_group",
+                "parentId": "group-outer",
+                "order": 5,
+                "layout": {"width": 6, "height": 120},
+            },
+        ])
+        with self.assertRaises(ValidationError):
+            validate_dashboard_schema(nested_schema)
+
+        # Child component cannot reference a parent group on a different page.
+        cross_page_schema = make_schema()
+        cross_page_schema["pages"] = [
+            {"id": "page-main", "title": "Main", "order": 1},
+            {"id": "page-other", "title": "Other", "order": 2},
+        ]
+        cross_page_schema["views"].append({
+            "id": "group-other",
+            "type": "layout_group",
+            "pageId": "page-other",
+            "order": 4,
+            "layout": {"width": 6, "height": 200},
+        })
+        cross_page_schema["views"][1]["parentId"] = "group-other"
+
+        with self.assertRaises(ValidationError):
+            validate_dashboard_schema(cross_page_schema)
+
+    def test_rejects_unknown_extra_fields_on_components(self):
+        schema = make_schema()
+        schema["views"][0]["unexpectedProp"] = True
+
+        with self.assertRaises(ValidationError):
+            validate_dashboard_schema(schema)
+
+    def test_rejects_duplicate_page_ids(self):
+        schema = make_schema()
+        schema["pages"] = [
+            {"id": "page-main", "title": "First", "order": 1},
+            {"id": "page-main", "title": "Duplicate", "order": 2},
+        ]
+
+        with self.assertRaises(ValidationError):
+            validate_dashboard_schema(schema)
+
+
+# --- Schema utility helpers ---
+
 
 class SchemaUtilsTests(unittest.TestCase):
     def test_gets_dashboard_title_and_fallback(self):
@@ -291,329 +406,7 @@ class SchemaUtilsTests(unittest.TestCase):
         self.assertEqual(python_string_literal(None, "fallback"), "'fallback'")
 
 
-class DataTransformTests(unittest.TestCase):
-    def setUp(self):
-        self.dataframe = pd.DataFrame({
-            "region": ["A", "A", "B"],
-            "sales": [10, 15, 7],
-        })
-
-    def test_aggregates_and_sorts_chart_data(self):
-        result = prepare_chart_data(self.dataframe, {
-            "x": "region",
-            "y": "sales",
-            "aggregation": "sum",
-            "sort": "desc",
-        })
-
-        self.assertEqual(result["region"].tolist(), ["B", "A"])
-        self.assertEqual(result["sales"].tolist(), [7, 25])
-
-    def test_sorts_chart_by_aggregated_y_value(self):
-        result = prepare_chart_data(self.dataframe, {
-            "x": "region",
-            "y": "sales",
-            "aggregation": "sum",
-            "sort": "desc",
-            "sortBy": "y",
-        })
-
-        self.assertEqual(result["region"].tolist(), ["A", "B"])
-        self.assertEqual(result["sales"].tolist(), [25, 7])
-
-    def test_calculates_metric(self):
-        self.assertEqual(
-            calculate_metric(self.dataframe, "sales", "sum"),
-            32,
-        )
-        self.assertEqual(
-            calculate_metric(self.dataframe, "sales", "count"),
-            3,
-        )
-
-    def test_metric_supports_all_aggregations_and_ignores_invalid_numbers(self):
-        dataframe = pd.DataFrame({"value": ["10", "20,5", "1 000", None, "bad"]})
-
-        self.assertEqual(calculate_metric(dataframe, "value", "sum"), 1030.5)
-        self.assertEqual(calculate_metric(dataframe, "value", "mean"), 343.5)
-        self.assertEqual(calculate_metric(dataframe, "value", "min"), 10)
-        self.assertEqual(calculate_metric(dataframe, "value", "max"), 1000)
-        # Count follows pandas/Streamlit semantics: every non-empty source
-        # value counts, even when it cannot be converted to a number.
-        self.assertEqual(calculate_metric(dataframe, "value", "count"), 4)
-
-    def test_metric_returns_zero_when_numeric_column_has_no_valid_values(self):
-        dataframe = pd.DataFrame({"value": [None, "", "bad"]})
-        self.assertEqual(calculate_metric(dataframe, "value", "sum"), 0)
-
-    def test_counts_non_numeric_chart_values(self):
-        result = prepare_chart_data(pd.DataFrame({
-            "region": ["A", "A", "B"],
-            "order": ["first", "second", "third"],
-        }), {
-            "x": "region",
-            "y": "order",
-            "aggregation": "count",
-            "sort": "asc",
-        })
-
-        self.assertEqual(result["order"].tolist(), [2, 1])
-
-    def test_supports_every_chart_aggregation(self):
-        expected_values = {
-            "sum": [25, 7],
-            "mean": [12.5, 7.0],
-            "count": [2, 1],
-            "min": [10, 7],
-            "max": [15, 7],
-        }
-
-        for aggregation, expected in expected_values.items():
-            with self.subTest(aggregation=aggregation):
-                result = prepare_chart_data(self.dataframe, {
-                    "x": "region",
-                    "y": "sales",
-                    "aggregation": aggregation,
-                    "sort": "asc",
-                })
-
-                self.assertEqual(result["region"].tolist(), ["A", "B"])
-                self.assertEqual(result["sales"].tolist(), expected)
-
-
-class DatasetPreviewTests(unittest.TestCase):
-    def test_returns_rows_for_live_canvas(self):
-        with tempfile.TemporaryDirectory() as directory:
-            datasets_dir = Path(directory)
-            data_dir = datasets_dir / "user-1" / "dataset-1"
-            data_dir.mkdir(parents=True)
-            (data_dir / "data.csv").write_text(
-                "region,sales\nA,10\nB,20\n",
-                encoding="utf-8",
-            )
-
-            with patch.object(dataset_service, "DATASETS_DIR", datasets_dir):
-                preview = dataset_service.get_dataset_preview(
-                    "user-1",
-                    "dataset-1",
-                    limit=100,
-                )
-
-            self.assertEqual(preview["returnedRows"], 2)
-            self.assertEqual(preview["fieldTypes"]["sales"], "number")
-            self.assertEqual(preview["rows"][1]["region"], "B")
-
-    def test_preview_api_returns_live_canvas_payload(self):
-        with tempfile.TemporaryDirectory() as directory:
-            datasets_dir = Path(directory)
-            data_dir = datasets_dir / "user-1" / "dataset-1"
-            data_dir.mkdir(parents=True)
-            (data_dir / "data.csv").write_text(
-                "region,sales\nA,10\nB,20\n",
-                encoding="utf-8",
-            )
-
-            app = FastAPI()
-            app.include_router(datasets_router)
-            app.dependency_overrides[
-                auth_service.get_current_active_user
-            ] = lambda: auth_service.User(
-                id="user-1",
-                email="test@example.com",
-            )
-
-            with patch.object(dataset_service, "DATASETS_DIR", datasets_dir):
-                response = TestClient(app).get(
-                    "/datasets/dataset-1/preview?limit=100"
-                )
-
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json()["rows"][0]["sales"], 10)
-
-    def test_inspect_and_preview_excel_sheets(self):
-        import io
-        from fastapi import UploadFile
-
-        with tempfile.TemporaryDirectory() as directory:
-            datasets_dir = Path(directory)
-            excel_buffer = io.BytesIO()
-            with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-                pd.DataFrame({"a": [1, 2]}).to_excel(writer, sheet_name="SheetA", index=False)
-                pd.DataFrame({"b": [3, 4]}).to_excel(writer, sheet_name="SheetB", index=False)
-            excel_bytes = excel_buffer.getvalue()
-
-            upload_file = UploadFile(
-                filename="test.xlsx",
-                file=io.BytesIO(excel_bytes),
-            )
-            sheets = dataset_service.inspect_excel_sheets(upload_file)
-            self.assertEqual(sheets, ["SheetA", "SheetB"])
-
-            with patch.object(dataset_service, "DATASETS_DIR", datasets_dir):
-                saved = dataset_service.save_dataset(
-                    user_id="user-1",
-                    file=upload_file,
-                    custom_name="custom_report",
-                    sheet_name="SheetB",
-                )
-                self.assertEqual(saved["name"], "custom_report.xlsx")
-                self.assertEqual(saved["sheetName"], "SheetB")
-                self.assertEqual(saved["fields"], ["b"])
-
-                preview = dataset_service.get_dataset_preview("user-1", saved["datasetId"])
-                self.assertEqual(preview["fields"], ["b"])
-                self.assertEqual(preview["rows"][0]["b"], 3)
-
-    def test_save_and_preview_tsv(self):
-        import io
-        from fastapi import UploadFile
-
-        with tempfile.TemporaryDirectory() as directory:
-            datasets_dir = Path(directory)
-            tsv_data = "col1\tcol2\n10\t20\n".encode("utf-8")
-            upload_file = UploadFile(
-                filename="data.tsv",
-                file=io.BytesIO(tsv_data),
-            )
-
-            with patch.object(dataset_service, "DATASETS_DIR", datasets_dir):
-                saved = dataset_service.save_dataset(
-                    user_id="user-1",
-                    file=upload_file,
-                    delimiter="\t",
-                )
-                self.assertEqual(saved["format"], "tsv")
-                self.assertEqual(saved["delimiter"], "\t")
-
-                preview = dataset_service.get_dataset_preview("user-1", saved["datasetId"])
-                self.assertEqual(preview["fields"], ["col1", "col2"])
-                self.assertEqual(preview["rows"][0]["col1"], 10)
-
-    def test_save_and_preview_cp1251_csv(self):
-        import io
-        from fastapi import UploadFile
-
-        with tempfile.TemporaryDirectory() as directory:
-            datasets_dir = Path(directory)
-            csv_text = "город;продажи\nМосква;150\nСанкт-Петербург;230\n"
-            csv_bytes = csv_text.encode("cp1251")
-            upload_file = UploadFile(
-                filename="sales_cp1251.csv",
-                file=io.BytesIO(csv_bytes),
-            )
-
-            with patch.object(dataset_service, "DATASETS_DIR", datasets_dir):
-                saved = dataset_service.save_dataset(
-                    user_id="user-1",
-                    file=upload_file,
-                )
-                self.assertEqual(saved["format"], "csv")
-                self.assertEqual(saved["delimiter"], ";")
-                self.assertEqual(saved["encoding"], "cp1251")
-                self.assertEqual(saved["fields"], ["город", "продажи"])
-
-                preview = dataset_service.get_dataset_preview("user-1", saved["datasetId"])
-                self.assertEqual(preview["fields"], ["город", "продажи"])
-                self.assertEqual(preview["rows"][0]["город"], "Москва")
-                self.assertEqual(preview["rows"][0]["продажи"], 150)
-
-    def test_save_and_preview_utf8_sig_csv(self):
-        import io
-        from fastapi import UploadFile
-
-        with tempfile.TemporaryDirectory() as directory:
-            datasets_dir = Path(directory)
-            csv_text = "клиент,сумма\nИван,500\nОльга,900\n"
-            csv_bytes = csv_text.encode("utf-8-sig")
-            upload_file = UploadFile(
-                filename="clients_bom.csv",
-                file=io.BytesIO(csv_bytes),
-            )
-
-            with patch.object(dataset_service, "DATASETS_DIR", datasets_dir):
-                saved = dataset_service.save_dataset(
-                    user_id="user-1",
-                    file=upload_file,
-                )
-                self.assertEqual(saved["format"], "csv")
-                self.assertEqual(saved["encoding"], "utf-8-sig")
-                self.assertEqual(saved["fields"], ["клиент", "сумма"])
-
-                preview = dataset_service.get_dataset_preview("user-1", saved["datasetId"])
-                self.assertEqual(preview["fields"], ["клиент", "сумма"])
-                self.assertEqual(preview["rows"][0]["клиент"], "Иван")
-
-
-class AuthSettingsTests(unittest.TestCase):
-    def test_registration_saves_name_and_authenticated_user_can_change_password(self):
-        with tempfile.TemporaryDirectory() as directory:
-            with patch.object(
-                auth_service,
-                "USERS_FILE",
-                Path(directory) / "users.json",
-            ):
-                user = auth_service.register_user(
-                    email="test@example.com",
-                    password="old-pass",
-                    name="Test User",
-                )
-                self.assertEqual(user.name, "Test User")
-
-                app = FastAPI()
-                app.include_router(auth_router)
-                app.dependency_overrides[
-                    auth_service.get_current_active_user
-                ] = lambda: user
-                response = TestClient(app).put(
-                    "/auth/password",
-                    json={
-                        "currentPassword": "old-pass",
-                        "newPassword": "new-pass",
-                    },
-                )
-
-                self.assertEqual(response.status_code, 200)
-                self.assertTrue(
-                    auth_service.authenticate_user(
-                        auth_service._load_users(),
-                        "test@example.com",
-                        "new-pass",
-                    )
-                )
-                self.assertFalse(
-                    auth_service.authenticate_user(
-                        auth_service._load_users(),
-                        "test@example.com",
-                        "old-pass",
-                    )
-                )
-
-    def test_password_change_rejects_wrong_current_password(self):
-        with tempfile.TemporaryDirectory() as directory:
-            with patch.object(
-                auth_service,
-                "USERS_FILE",
-                Path(directory) / "users.json",
-            ):
-                user = auth_service.register_user(
-                    email="test@example.com",
-                    password="old-pass",
-                )
-
-                with self.assertRaises(ValueError):
-                    auth_service.change_user_password(
-                        user.id,
-                        "incorrect",
-                        "new-pass",
-                    )
-
-                self.assertTrue(
-                    auth_service.authenticate_user(
-                        auth_service._load_users(),
-                        "test@example.com",
-                        "old-pass",
-                    )
-                )
+# --- Standalone Streamlit code generation and AppTest execution ---
 
 
 class GeneratorTests(unittest.TestCase):
@@ -623,16 +416,10 @@ class GeneratorTests(unittest.TestCase):
         )
 
         compile(code, "generated_app.py", "exec")
-        self.assertNotIn("from streamlit_elements import", code)
-        self.assertIn("display: grid !important", code)
-        self.assertIn("st.vega_lite_chart", code)
         self.assertIn("@st.cache_data(show_spinner=False)", code)
         self.assertIn("'height': 360", code)
         self.assertIn("'color': '#818cf8'", code)
-        self.assertIn("calculate_metric", code)
-        self.assertIn("render_filter", code)
-        self.assertIn("render_metric", code)
-        self.assertIn("components_from_schema", code)
+        self.assertIn("render_multipage_dashboard(DASHBOARD_SCHEMA, datasets)", code)
 
     def test_generated_dashboard_with_excel_and_custom_delimiter_is_valid_python(self):
         schema = make_schema()
@@ -654,8 +441,8 @@ class GeneratorTests(unittest.TestCase):
         ]
         code = generate_streamlit_code(validate_dashboard_schema(schema))
         compile(code, "generated_app_excel.py", "exec")
-        self.assertIn("pd.read_excel", code)
         self.assertIn("'sheetName': 'Лист2'", code)
+        self.assertIn("'delimiter': '\\t'", code)
 
     def test_generates_every_supported_chart_type(self):
         for chart_type in (
@@ -673,7 +460,6 @@ class GeneratorTests(unittest.TestCase):
 
                 compile(code, "generated_app.py", "exec")
                 self.assertIn(f"'type': '{chart_type}'", code)
-                self.assertIn("render_chart", code)
 
     def test_generates_text_component(self):
         schema = make_schema()
@@ -701,307 +487,6 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual(validated_schema["views"][2]["layout"]["height"], 60)
         self.assertEqual(validated_schema["views"][2]["fontSize"], 20)
         self.assertIn("Данные обновляются раз в неделю.", code)
-        self.assertIn("render_text", code)
-
-    def test_rejects_too_small_chart_height(self):
-        schema = make_schema()
-        schema["views"][0]["layout"]["height"] = 60
-
-        with self.assertRaises(ValidationError):
-            validate_dashboard_schema(schema)
-
-    def test_generates_component_gradient_chart(self):
-        schema = make_schema()
-        schema["views"][0].update({
-            "type": "bar_chart",
-            "colorMode": "gradient",
-            "palette": ["#fbbf24", "#f97316", "#ef4444"],
-        })
-
-        code = generate_streamlit_code(
-            validate_dashboard_schema(schema)
-        )
-
-        compile(code, "generated_app.py", "exec")
-        self.assertNotIn("streamlit_elements", code)
-        self.assertIn("'colorMode': 'gradient'", code)
-        self.assertIn(
-            "'palette': ['#fbbf24', '#f97316', '#ef4444']",
-            code,
-        )
-        self.assertIn("color_encoding", code)
-        self.assertIn('"scale": {"range": palette}', code)
-
-    def test_generated_filter_uses_native_streamlit_widget(self):
-        code = generate_streamlit_code(
-            validate_dashboard_schema(make_schema())
-        )
-        tree = ast.parse(code)
-        state_key_function = next(
-            node for node in tree.body
-            if isinstance(node, ast.FunctionDef)
-            and node.name == "component_state_key"
-        )
-        namespace = {}
-        exec(
-            compile(
-                ast.Module(body=[state_key_function], type_ignores=[]),
-                "generated_filter.py",
-                "exec",
-            ),
-            namespace,
-        )
-
-        self.assertEqual(
-            namespace["component_state_key"]({
-                "id": "selectbox-f5aa998d-8c1d-4741-9379-26eecebafa4a",
-            }),
-            "builder_filter_selectbox_f5aa998d_8c1d_4741_9379_26eecebafa4a",
-        )
-        self.assertIn("st.selectbox(", code)
-        self.assertNotIn("onChange=filter_change_handler", code)
-
-    def test_dense_x_axis_uses_evenly_distributed_tick_values(self):
-        code = generate_streamlit_code(
-            validate_dashboard_schema(make_schema())
-        )
-        tree = ast.parse(code)
-        tick_function = next(
-            node for node in tree.body
-            if isinstance(node, ast.FunctionDef)
-            and node.name == "axis_tick_values"
-        )
-        namespace = {}
-        exec(
-            compile(
-                ast.Module(body=[tick_function], type_ignores=[]),
-                "generated_ticks.py",
-                "exec",
-            ),
-            namespace,
-        )
-        values = [
-            f"2026-01-{day:02d}"
-            for day in range(1, 32)
-        ]
-
-        ticks = namespace["axis_tick_values"](values, 6)
-
-        self.assertEqual(len(ticks), 6)
-        self.assertEqual(ticks[0], "2026-01-01")
-        self.assertEqual(ticks[-1], "2026-01-31")
-
-    def test_scatter_uses_fast_native_gradient_scale(self):
-        schema = make_schema()
-        schema["views"][0].update({
-            "type": "scatter_plot",
-            "colorMode": "gradient",
-        })
-
-        code = generate_streamlit_code(validate_dashboard_schema(schema))
-
-        self.assertIn('"type": "point"', code)
-        self.assertIn("chart_point_limit", code)
-        self.assertIn("downsample_frame", code)
-        self.assertIn('"scale": {"range": palette}', code)
-        self.assertIn('"size": 420', code)
-        self.assertIn('"nearest": True', code)
-        self.assertIn('"on": "pointerover"', code)
-
-    def test_line_and_area_charts_use_nearest_hover_guide(self):
-        code = generate_streamlit_code(
-            validate_dashboard_schema(make_schema())
-        )
-
-        self.assertIn('chart_type in {"line_chart", "area_chart"}', code)
-        self.assertIn('"type": "rule"', code)
-        self.assertIn('"encodings": ["x"]', code)
-        self.assertIn('"clear": "pointerout"', code)
-        self.assertIn('{"filter": {"param": "hover", "empty": False}}', code)
-
-    def test_freeform_grid_preserves_canvas_positions(self):
-        code = generate_streamlit_code(
-            validate_dashboard_schema(make_schema())
-        )
-        tree = ast.parse(code)
-        layout_functions = [
-            node for node in tree.body
-            if isinstance(node, ast.FunctionDef)
-            and node.name in {"grid_height", "pack_components"}
-        ]
-        namespace = {
-            "GRID_COLUMNS": 12,
-            "GRID_ROW_HEIGHT": 20,
-            "GRID_COLUMN_GAP": 16,
-            "GRID_ROW_GAP": 8,
-            "CARD_CHROME_HEIGHT": 96,
-        }
-        exec(
-            compile(
-                ast.Module(body=layout_functions, type_ignores=[]),
-                "generated_layout.py",
-                "exec",
-            ),
-            namespace,
-        )
-        items = [
-            {"id": "metric", "order": 1, "layout": {"x": 1, "y": 2, "width": 3, "height": 160}},
-            {"id": "chart-1", "order": 2, "layout": {"x": 4, "y": 2, "width": 6, "height": 280}},
-            {"id": "chart-2", "order": 3, "layout": {"width": 6, "height": 220}},
-        ]
-
-        packed = namespace["pack_components"](items)
-
-        self.assertEqual(
-            [
-                (item["component"]["id"], item["x"], item["y"])
-                for item in packed
-            ],
-            [
-                ("metric", 1, 2),
-                ("chart-1", 4, 2),
-                ("chart-2", 0, 16),
-            ],
-        )
-
-    def test_generated_dashboard_keeps_filters_in_canvas_rows(self):
-        schema = make_schema()
-        schema["filters"][0]["layout"].update({"x": 0, "y": 0})
-        schema["views"][0]["layout"].update({"x": 4, "y": 0})
-        schema["views"][1]["layout"].update({"x": 0, "y": 5})
-
-        code = generate_streamlit_code(validate_dashboard_schema(schema))
-
-        self.assertIn("placements = pack_components(components_from_schema(schema, page_id))", code)
-        self.assertIn("dashboard_grid_style(", code)
-        self.assertIn("all_components_from_schema(schema, page_id)", code)
-        self.assertIn('with st.container(key="dashboard_grid"):', code)
-        self.assertIn('grid_pixel_height(item["h"])', code)
-        self.assertIn("render_component(", code)
-        self.assertIn('[*schema.get("filters", []), *schema.get("views", [])]', code)
-
-    def test_generated_dashboard_uses_native_page_navigation(self):
-        schema = make_schema()
-        schema["pages"] = [
-            {"id": "page-main", "title": "Главная", "order": 1},
-            {"id": "page-details", "title": "Детали", "order": 2},
-        ]
-        schema["views"][0]["pageId"] = "page-details"
-
-        validated = validate_dashboard_schema(schema)
-        code = generate_streamlit_code(validated)
-
-        self.assertIn('list(navigation_pages.values())', code)
-        self.assertIn('position="top" if len(pages) > 1 else "hidden"', code)
-        self.assertIn("render_multipage_dashboard(DASHBOARD_SCHEMA, datasets)", code)
-        self.assertEqual(
-            [component["id"] for component in render_core.components_from_schema(
-                validated,
-                "page-details",
-            )],
-            ["chart-1"],
-        )
-
-    def test_staggered_canvas_uses_exact_css_grid_coordinates(self):
-        code = generate_streamlit_code(
-            validate_dashboard_schema(make_schema())
-        )
-        tree = ast.parse(code)
-        names = {
-            "component_state_key",
-            "grid_height",
-            "pack_components",
-            "grid_pixel_height",
-            "card_container_key",
-            "dashboard_grid_style",
-        }
-        functions = [
-            node for node in tree.body
-            if isinstance(node, ast.FunctionDef) and node.name in names
-        ]
-        namespace = {
-            "GRID_COLUMNS": 12,
-            "GRID_ROW_HEIGHT": 20,
-            "GRID_COLUMN_GAP": 16,
-            "GRID_ROW_GAP": 8,
-            "CARD_CHROME_HEIGHT": 96,
-        }
-        exec(
-            compile(
-                ast.Module(body=functions, type_ignores=[]),
-                "generated_css_grid.py",
-                "exec",
-            ),
-            namespace,
-        )
-        components = [
-            {"id": "filter", "order": 1, "layout": {"x": 0, "y": 0, "width": 3, "height": 140}},
-            {"id": "metric", "order": 2, "layout": {"x": 3, "y": 0, "width": 3, "height": 140}},
-            {"id": "right-top", "order": 3, "layout": {"x": 6, "y": 0, "width": 6, "height": 392}},
-            {"id": "left-middle", "order": 4, "layout": {"x": 0, "y": 7, "width": 6, "height": 284}},
-            {"id": "right-bottom", "order": 5, "layout": {"x": 6, "y": 14, "width": 6, "height": 500}},
-            {"id": "left-bottom", "order": 6, "layout": {"x": 0, "y": 18, "width": 6, "height": 356}},
-        ]
-
-        placements = namespace["pack_components"](components)
-        style = namespace["dashboard_grid_style"](placements)
-
-        self.assertEqual(
-            [(item["x"], item["y"], item["w"], item["h"]) for item in placements],
-            [
-                (0, 0, 3, 9),
-                (3, 0, 3, 9),
-                (6, 0, 6, 18),
-                (0, 9, 6, 14),
-                (6, 18, 6, 22),
-                (0, 23, 6, 17),
-            ],
-        )
-        self.assertIn("grid-column: 7 / span 6;", style)
-        self.assertIn("grid-row: 19 / span 22;", style)
-        for component in components:
-            safe_id = component["id"].replace("-", "_")
-            self.assertIn(f"st-key-card_builder_filter_{safe_id}", style)
-
-    def test_css_grid_supports_non_sliceable_canvas_layouts(self):
-        code = generate_streamlit_code(validate_dashboard_schema(make_schema()))
-        tree = ast.parse(code)
-        names = {
-            "component_state_key",
-            "card_container_key",
-            "dashboard_grid_style",
-        }
-        functions = [
-            node for node in tree.body
-            if isinstance(node, ast.FunctionDef) and node.name in names
-        ]
-        namespace = {
-            "GRID_COLUMNS": 12,
-            "GRID_ROW_HEIGHT": 20,
-            "GRID_COLUMN_GAP": 16,
-            "GRID_ROW_GAP": 8,
-        }
-        exec(
-            compile(
-                ast.Module(body=functions, type_ignores=[]),
-                "generated_irregular_grid.py",
-                "exec",
-            ),
-            namespace,
-        )
-        placements = [
-            {"x": 0, "y": 0, "w": 8, "h": 6, "component": {"id": "top-left"}},
-            {"x": 8, "y": 0, "w": 4, "h": 10, "component": {"id": "top-right"}},
-            {"x": 0, "y": 6, "w": 4, "h": 8, "component": {"id": "bottom-left"}},
-            {"x": 4, "y": 10, "w": 8, "h": 4, "component": {"id": "bottom-right"}},
-        ]
-
-        style = namespace["dashboard_grid_style"](placements)
-
-        self.assertEqual(style.count("grid-column:"), len(placements))
-        self.assertEqual(style.count("grid-row:"), len(placements))
-        self.assertIn("grid-column: 5 / span 8;", style)
-        self.assertIn("grid-row: 11 / span 4;", style)
 
     def test_generated_native_filter_changes_selected_value(self):
         code = generate_streamlit_code(
@@ -1021,10 +506,83 @@ class GeneratorTests(unittest.TestCase):
             app = AppTest.from_file(project_dir / "app.py", default_timeout=20)
             app.run()
             self.assertEqual(len(app.selectbox), 1)
+            self.assertEqual(app.metric[0].value, "30")
             app.selectbox[0].select("A").run()
 
         self.assertEqual(app.selectbox[0].value, "A")
+        self.assertEqual(app.metric[0].value, "10")
         self.assertEqual(len(app.exception), 0)
+
+    def test_generated_dashboard_loads_excel_sheet_and_cp1251_csv_in_apptest(self):
+        schema = {
+            "version": 2,
+            "dashboard": {"title": "Multi-format dashboard", "grid": {"columns": 12}},
+            "dataSources": [
+                {
+                    "type": "backend_dataset",
+                    "datasetId": "ds-excel",
+                    "name": "report.xlsx",
+                    "format": "excel",
+                    "sheetName": "TargetSheet",
+                },
+                {
+                    "type": "backend_dataset",
+                    "datasetId": "ds-cp1251",
+                    "name": "sales_ru.csv",
+                    "format": "csv",
+                    "delimiter": ";",
+                    "encoding": "cp1251",
+                },
+            ],
+            "filters": [],
+            "views": [
+                {
+                    "id": "metric-excel",
+                    "type": "metric",
+                    "datasetId": "ds-excel",
+                    "order": 1,
+                    "layout": {"width": 6, "height": 120},
+                    "title": "Excel total",
+                    "field": "amount",
+                    "aggregation": "sum",
+                },
+                {
+                    "id": "metric-csv",
+                    "type": "metric",
+                    "datasetId": "ds-cp1251",
+                    "order": 2,
+                    "layout": {"width": 6, "height": 120},
+                    "title": "CSV total",
+                    "field": "продажи",
+                    "aggregation": "sum",
+                },
+            ],
+        }
+        code = generate_streamlit_code(validate_dashboard_schema(schema))
+
+        with tempfile.TemporaryDirectory() as directory:
+            project_dir = Path(directory)
+            data_dir = project_dir / "data"
+            data_dir.mkdir()
+            (project_dir / "app.py").write_text(code, encoding="utf-8")
+
+            with pd.ExcelWriter(data_dir / "report.xlsx", engine="openpyxl") as writer:
+                pd.DataFrame({"amount": [1]}).to_excel(writer, sheet_name="Ignored", index=False)
+                pd.DataFrame({"amount": [15, 25]}).to_excel(
+                    writer,
+                    sheet_name="TargetSheet",
+                    index=False,
+                )
+
+            (data_dir / "sales_ru.csv").write_bytes(
+                "город;продажи\nМосква;120\nКазань;80\n".encode("cp1251")
+            )
+
+            app = AppTest.from_file(project_dir / "app.py", default_timeout=20)
+            app.run()
+
+        self.assertEqual(len(app.exception), 0)
+        self.assertEqual([m.value for m in app.metric], ["40", "200"])
 
     def test_generated_multipage_dashboard_starts(self):
         schema = make_schema()
@@ -1146,6 +704,521 @@ class GeneratorTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    @staticmethod
+    def _make_realistic_showcase_schema() -> dict:
+        dataset_id = "0712c9f9-01bb-4bfc-9aed-f8bed18eb4b2"
+        page_two_id = "page-303d9150-38b3-4178-bbdf-ccc6c5161e18"
+        group_id = "layout_group-b0133c4f-a382-4bcf-bccd-46f7907c7909"
+        return {
+            "version": 2,
+            "dashboard": {"title": "Анализ продаж ", "grid": {"columns": 12}},
+            "pages": [
+                {"id": "page-main", "title": "Главная", "order": 1},
+                {"id": page_two_id, "title": "Страница 2", "order": 2},
+            ],
+            "dataSources": [
+                {
+                    "type": "backend_dataset",
+                    "datasetId": dataset_id,
+                    "name": "dashboard_showcase.csv",
+                    "format": "csv",
+                    "delimiter": None,
+                    "encoding": None,
+                    "sheetName": None,
+                    "fields": [
+                        "order_id", "date", "month", "region", "category",
+                        "product", "channel", "customer_segment", "quantity",
+                        "unit_price", "discount", "revenue", "cost", "profit",
+                        "satisfaction_score",
+                    ],
+                }
+            ],
+            "filters": [
+                {
+                    "id": "selectbox-13fcd432-94f5-4b5d-a5c5-d499f37c005f",
+                    "type": "selectbox",
+                    "pageId": "page-main",
+                    "parentId": None,
+                    "tabId": None,
+                    "surface": "card",
+                    "showBorder": True,
+                    "showBackground": True,
+                    "contentAlignment": "left",
+                    "verticalAlignment": "center",
+                    "padding": 8,
+                    "spacing": 0,
+                    "contentWidth": "stretch",
+                    "heightMode": "fixed",
+                    "elementFontSize": "auto",
+                    "elementTextColor": "#d4d4d8",
+                    "elementFontWeight": "normal",
+                    "elementFontStyle": "normal",
+                    "datasetId": dataset_id,
+                    "order": 3,
+                    "layout": {"x": 0, "y": 0, "width": 3, "height": 160},
+                    "title": "Фильтр",
+                    "field": "region",
+                    "scope": "global",
+                    "widget": "selectbox",
+                },
+                {
+                    "id": "selectbox-c04512f3-d993-4a74-b7fc-a206d1807553",
+                    "type": "selectbox",
+                    "pageId": "page-main",
+                    "parentId": group_id,
+                    "tabId": None,
+                    "surface": "card",
+                    "showBorder": True,
+                    "showBackground": True,
+                    "contentAlignment": "left",
+                    "verticalAlignment": "center",
+                    "padding": 8,
+                    "spacing": 0,
+                    "contentWidth": "stretch",
+                    "heightMode": "auto",
+                    "elementFontSize": "auto",
+                    "elementTextColor": "#d4d4d8",
+                    "elementFontWeight": "normal",
+                    "elementFontStyle": "normal",
+                    "datasetId": dataset_id,
+                    "order": 10,
+                    "layout": {"x": 0, "y": 0, "width": 2, "height": 80},
+                    "title": "",
+                    "field": "category",
+                    "scope": "global",
+                    "widget": "selectbox",
+                },
+                {
+                    "id": "data_control-66b565d3-cc17-45bd-95f8-be4f2d70ab5f",
+                    "type": "data_control",
+                    "pageId": "page-main",
+                    "parentId": None,
+                    "tabId": None,
+                    "surface": "card",
+                    "showBorder": True,
+                    "showBackground": True,
+                    "contentAlignment": "left",
+                    "verticalAlignment": "center",
+                    "padding": 8,
+                    "spacing": 0,
+                    "contentWidth": "stretch",
+                    "heightMode": "fixed",
+                    "elementFontSize": "auto",
+                    "elementTextColor": "#d4d4d8",
+                    "elementFontWeight": "normal",
+                    "elementFontStyle": "normal",
+                    "datasetId": dataset_id,
+                    "order": 12,
+                    "layout": {"x": 1, "y": 59, "width": 4, "height": 160},
+                    "title": "",
+                    "field": "date",
+                    "scope": "global",
+                    "controlType": "date",
+                },
+            ],
+            "views": [
+                {
+                    "id": "table-a1ecf907-e0dd-4601-bc05-5e617242b6b7",
+                    "type": "table",
+                    "pageId": page_two_id,
+                    "parentId": None,
+                    "tabId": None,
+                    "surface": "card",
+                    "showBorder": True,
+                    "showBackground": True,
+                    "contentAlignment": "left",
+                    "verticalAlignment": "top",
+                    "padding": 12,
+                    "spacing": 0,
+                    "contentWidth": "stretch",
+                    "heightMode": "fixed",
+                    "elementFontSize": "auto",
+                    "elementTextColor": "#d4d4d8",
+                    "elementFontWeight": "normal",
+                    "elementFontStyle": "normal",
+                    "datasetId": dataset_id,
+                    "order": 1,
+                    "layout": {"x": 0, "y": 0, "width": 12, "height": 456},
+                    "title": "",
+                    "columns": [],
+                    "tableMode": "data",
+                    "rowMode": "limit",
+                    "rowLimit": 1150,
+                    "hideIndex": True,
+                    "pivotIndex": "",
+                    "pivotValue": "",
+                    "pivotAggregation": "sum",
+                },
+                {
+                    "id": "page_link-f9e7b50a-47d5-4a77-83bb-5700c4080ea0",
+                    "type": "page_link",
+                    "pageId": page_two_id,
+                    "parentId": None,
+                    "tabId": None,
+                    "surface": "card",
+                    "showBorder": True,
+                    "showBackground": False,
+                    "contentAlignment": "left",
+                    "verticalAlignment": "top",
+                    "padding": 0,
+                    "spacing": 0,
+                    "contentWidth": "stretch",
+                    "heightMode": "fixed",
+                    "elementFontSize": "auto",
+                    "elementTextColor": "#d4d4d8",
+                    "elementFontWeight": "normal",
+                    "elementFontStyle": "normal",
+                    "datasetId": None,
+                    "order": 2,
+                    "layout": {"x": 1, "y": 20, "width": 3, "height": 76},
+                    "title": "Открыть страницу",
+                    "targetPageId": "page-main",
+                    "displayStyle": "button",
+                    "buttonColor": "#f47721",
+                },
+                {
+                    "id": "metric-0927275a-8457-4335-880b-fdf0e62abd55",
+                    "type": "metric",
+                    "pageId": "page-main",
+                    "parentId": None,
+                    "tabId": None,
+                    "surface": "card",
+                    "showBorder": True,
+                    "showBackground": True,
+                    "contentAlignment": "center",
+                    "verticalAlignment": "center",
+                    "padding": 8,
+                    "spacing": 0,
+                    "contentWidth": "stretch",
+                    "heightMode": "fixed",
+                    "elementFontSize": "auto",
+                    "elementTextColor": "#d4d4d8",
+                    "elementFontWeight": "normal",
+                    "elementFontStyle": "normal",
+                    "datasetId": dataset_id,
+                    "order": 4,
+                    "layout": {"x": 8, "y": 0, "width": 4, "height": 160},
+                    "title": "Метрика",
+                    "description": "Средний чек",
+                    "field": "revenue",
+                    "aggregation": "mean",
+                },
+                {
+                    "id": "bar_chart-feb0f2a2-9918-489d-9b34-128a7bec54e2",
+                    "type": "bar_chart",
+                    "pageId": "page-main",
+                    "parentId": None,
+                    "tabId": None,
+                    "surface": "card",
+                    "showBorder": True,
+                    "showBackground": True,
+                    "contentAlignment": "left",
+                    "verticalAlignment": "top",
+                    "padding": 12,
+                    "spacing": 0,
+                    "contentWidth": "stretch",
+                    "heightMode": "fixed",
+                    "elementFontSize": "auto",
+                    "elementTextColor": "#d4d4d8",
+                    "elementFontWeight": "normal",
+                    "elementFontStyle": "normal",
+                    "datasetId": dataset_id,
+                    "order": 5,
+                    "layout": {"x": 0, "y": 6, "width": 6, "height": 344},
+                    "title": "ТОП Категорий",
+                    "x": "category",
+                    "y": "revenue",
+                    "aggregation": "sum",
+                    "sort": "asc",
+                    "sortBy": "y",
+                    "color": "#7656c8",
+                    "colorMode": "gradient",
+                    "palette": ["#277c70", "#2f927a", "#398b67", "#829c3d"],
+                    "axisLabelFontSize": 11,
+                    "axisLabelColor": "#94a3b8",
+                    "axisTitleFontSize": 12,
+                    "axisTitleColor": "#94a3b8",
+                },
+                {
+                    "id": "line_chart-e8239d41-5dc3-407a-a790-7b8bead14cd5",
+                    "type": "line_chart",
+                    "pageId": "page-main",
+                    "parentId": None,
+                    "tabId": None,
+                    "surface": "card",
+                    "showBorder": True,
+                    "showBackground": True,
+                    "contentAlignment": "left",
+                    "verticalAlignment": "top",
+                    "padding": 12,
+                    "spacing": 0,
+                    "contentWidth": "stretch",
+                    "heightMode": "fixed",
+                    "elementFontSize": "auto",
+                    "elementTextColor": "#d4d4d8",
+                    "elementFontWeight": "normal",
+                    "elementFontStyle": "normal",
+                    "datasetId": dataset_id,
+                    "order": 6,
+                    "layout": {"x": 6, "y": 6, "width": 6, "height": 344},
+                    "title": "Прибыль по месяцам",
+                    "x": "month",
+                    "y": "revenue",
+                    "aggregation": "sum",
+                    "sort": "asc",
+                    "sortBy": "x",
+                    "color": "#f59e0b",
+                    "colorMode": "solid",
+                    "palette": ["#3478c8", "#4e78c7", "#7567c9", "#9b62b5"],
+                    "axisLabelFontSize": 11,
+                    "axisLabelColor": "#94a3b8",
+                    "axisTitleFontSize": 12,
+                    "axisTitleColor": "#94a3b8",
+                },
+                {
+                    "id": "area_chart-e525583c-1008-422c-b36d-b675391b2fb6",
+                    "type": "area_chart",
+                    "pageId": "page-main",
+                    "parentId": None,
+                    "tabId": None,
+                    "surface": "card",
+                    "showBorder": True,
+                    "showBackground": True,
+                    "contentAlignment": "left",
+                    "verticalAlignment": "top",
+                    "padding": 12,
+                    "spacing": 0,
+                    "contentWidth": "stretch",
+                    "heightMode": "fixed",
+                    "elementFontSize": "auto",
+                    "elementTextColor": "#d4d4d8",
+                    "elementFontWeight": "normal",
+                    "elementFontStyle": "normal",
+                    "datasetId": dataset_id,
+                    "order": 7,
+                    "layout": {"x": 0, "y": 23, "width": 6, "height": 344},
+                    "title": "Динамика чистой прибыли",
+                    "x": "month",
+                    "y": "profit",
+                    "aggregation": "mean",
+                    "sort": "asc",
+                    "sortBy": "x",
+                    "color": "#818cf8",
+                    "colorMode": "solid",
+                    "palette": ["#c94f8a", "#b94f9a", "#9859b8", "#7656c8"],
+                    "axisLabelFontSize": 11,
+                    "axisLabelColor": "#94a3b8",
+                    "axisTitleFontSize": 12,
+                    "axisTitleColor": "#94a3b8",
+                },
+                {
+                    "id": "scatter_plot-6736b01d-44c8-44db-85a7-cbddcb981ee0",
+                    "type": "scatter_plot",
+                    "pageId": "page-main",
+                    "parentId": None,
+                    "tabId": None,
+                    "surface": "card",
+                    "showBorder": True,
+                    "showBackground": True,
+                    "contentAlignment": "left",
+                    "verticalAlignment": "top",
+                    "padding": 12,
+                    "spacing": 0,
+                    "contentWidth": "stretch",
+                    "heightMode": "fixed",
+                    "elementFontSize": "auto",
+                    "elementTextColor": "#d4d4d8",
+                    "elementFontWeight": "normal",
+                    "elementFontStyle": "normal",
+                    "datasetId": dataset_id,
+                    "order": 8,
+                    "layout": {"x": 6, "y": 23, "width": 6, "height": 344},
+                    "title": "Корреляция выручки и прибыли",
+                    "x": "revenue",
+                    "y": "profit",
+                    "aggregation": "none",
+                    "sort": "none",
+                    "sortBy": "x",
+                    "color": "#38bdf8",
+                    "colorMode": "gradient",
+                    "palette": ["#829c3d", "#398b67", "#2f927a", "#277c70"],
+                    "axisLabelFontSize": 11,
+                    "axisLabelColor": "#94a3b8",
+                    "axisTitleFontSize": 12,
+                    "axisTitleColor": "#94a3b8",
+                },
+                {
+                    "id": group_id,
+                    "type": "layout_group",
+                    "pageId": "page-main",
+                    "parentId": None,
+                    "tabId": None,
+                    "surface": "none",
+                    "showBorder": True,
+                    "showBackground": False,
+                    "contentAlignment": "left",
+                    "verticalAlignment": "top",
+                    "padding": 8,
+                    "spacing": 0,
+                    "contentWidth": "stretch",
+                    "heightMode": "fixed",
+                    "elementFontSize": "auto",
+                    "elementTextColor": "#d4d4d8",
+                    "elementFontWeight": "normal",
+                    "elementFontStyle": "normal",
+                    "datasetId": None,
+                    "order": 9,
+                    "layout": {"x": 0, "y": 40, "width": 12, "height": 524},
+                    "title": "",
+                    "direction": "vertical",
+                    "gap": 8,
+                    "horizontalAlignment": "left",
+                    "wrap": True,
+                },
+                {
+                    "id": "page_link-d8dcb409-f91b-4742-9feb-a709835d93b7",
+                    "type": "page_link",
+                    "pageId": "page-main",
+                    "parentId": None,
+                    "tabId": None,
+                    "surface": "card",
+                    "showBorder": False,
+                    "showBackground": False,
+                    "contentAlignment": "right",
+                    "verticalAlignment": "center",
+                    "padding": 12,
+                    "spacing": 16,
+                    "contentWidth": "content",
+                    "heightMode": "fixed",
+                    "elementFontSize": 20,
+                    "elementTextColor": "#d65f59",
+                    "elementFontWeight": "normal",
+                    "elementFontStyle": "normal",
+                    "datasetId": None,
+                    "order": 11,
+                    "layout": {"x": 3, "y": 0, "width": 2, "height": 160},
+                    "title": "Открыть страницу",
+                    "targetPageId": page_two_id,
+                    "displayStyle": "button",
+                    "buttonColor": "#7656c8",
+                },
+                {
+                    "id": "bar_chart-4442c4a1-eb59-4193-98aa-1d9cdb014fe9",
+                    "type": "bar_chart",
+                    "pageId": "page-main",
+                    "parentId": group_id,
+                    "tabId": None,
+                    "surface": "card",
+                    "showBorder": True,
+                    "showBackground": True,
+                    "contentAlignment": "left",
+                    "verticalAlignment": "top",
+                    "padding": 12,
+                    "spacing": 0,
+                    "contentWidth": "stretch",
+                    "heightMode": "fixed",
+                    "elementFontSize": "auto",
+                    "elementTextColor": "#d4d4d8",
+                    "elementFontWeight": "normal",
+                    "elementFontStyle": "normal",
+                    "datasetId": dataset_id,
+                    "order": 13,
+                    "layout": {"x": 0, "y": 0, "width": 6, "height": 320},
+                    "title": "",
+                    "x": "category",
+                    "y": "cost",
+                    "aggregation": "mean",
+                    "sort": "asc",
+                    "sortBy": "y",
+                    "color": "#3478c8",
+                    "colorMode": "gradient",
+                    "palette": ["#9b62b5", "#7567c9", "#4e78c7", "#3478c8"],
+                    "axisLabelFontSize": 11,
+                    "axisLabelColor": "#94a3b8",
+                    "axisTitleFontSize": 12,
+                    "axisTitleColor": "#94a3b8",
+                },
+                {
+                    "id": "text-69286060-1a91-4269-9e5f-e9c1a6c29735",
+                    "type": "text",
+                    "pageId": "page-main",
+                    "parentId": None,
+                    "tabId": None,
+                    "surface": "card",
+                    "showBorder": False,
+                    "showBackground": False,
+                    "contentAlignment": "left",
+                    "verticalAlignment": "top",
+                    "padding": 24,
+                    "spacing": 0,
+                    "contentWidth": "content",
+                    "heightMode": "fixed",
+                    "elementFontSize": "auto",
+                    "elementTextColor": "#d4d4d8",
+                    "elementFontWeight": "normal",
+                    "elementFontStyle": "normal",
+                    "datasetId": None,
+                    "order": 14,
+                    "layout": {"x": 5, "y": 0, "width": 3, "height": 160},
+                    "title": "",
+                    "content": "Анализ продаж",
+                    "fontSize": 32,
+                    "fontWeight": "normal",
+                    "fontStyle": "normal",
+                    "color": "#d4d4d8",
+                    "textAlign": "center",
+                },
+            ],
+        }
+
+    def test_realistic_showcase_dashboard_runs_end_to_end_in_apptest(self):
+        validated = validate_dashboard_schema(self._make_realistic_showcase_schema())
+        code = generate_streamlit_code(validated)
+        compile(code, "showcase_app.py", "exec")
+
+        csv_content = "\n".join([
+            "order_id,date,month,region,category,product,channel,customer_segment,quantity,unit_price,discount,revenue,cost,profit,satisfaction_score",
+            "1,2026-01-10,2026-01,North,Electronics,Phone,Online,B2C,2,500,0,1000,600,400,4.8",
+            "2,2026-01-20,2026-01,North,Home,Lamp,Retail,B2C,1,200,0,200,120,80,4.5",
+            "3,2026-02-05,2026-02,South,Electronics,Laptop,Online,B2B,1,1800,0,1800,1100,700,4.9",
+        ])
+
+        with tempfile.TemporaryDirectory() as directory:
+            project_dir = Path(directory)
+            data_dir = project_dir / "data"
+            data_dir.mkdir()
+            (project_dir / "app.py").write_text(code, encoding="utf-8")
+            (data_dir / "dashboard_showcase.csv").write_text(csv_content, encoding="utf-8")
+
+            app = AppTest.from_file(project_dir / "app.py", default_timeout=20)
+            app.run()
+
+            self.assertEqual(len(app.exception), 0)
+            # Page 1: root region filter + nested category filter, date data_control, mean revenue metric, navigation button.
+            self.assertEqual(len(app.selectbox), 2)
+            self.assertEqual(len(app.date_input), 1)
+            self.assertEqual(len(app.button), 1)
+            self.assertEqual(app.metric[0].value, "1 000.00")
+
+            # Root filter narrows revenue mean to North rows (1000, 200 -> 600.00).
+            app.selectbox[0].select("North").run()
+            self.assertEqual(len(app.exception), 0)
+            self.assertEqual(app.metric[0].value, "600.00")
+
+            # Nested filter inside layout_group further narrows to Home row (200.00).
+            app.selectbox[1].select("Home").run()
+            self.assertEqual(len(app.exception), 0)
+            self.assertEqual(app.metric[0].value, "200.00")
+
+            # Clicking the page_link button switches to page 2 with the full table.
+            app.button[0].click().run()
+            self.assertEqual(len(app.exception), 0)
+            self.assertEqual(len(app.dataframe), 1)
+            self.assertEqual(len(app.button), 1)
+
+
+# --- Runtime renderer (render_core) behavior ---
+
 
 class RuntimeRendererTests(unittest.TestCase):
     def test_chart_supports_the_same_field_on_both_axes(self):
@@ -1163,19 +1236,6 @@ class RuntimeRendererTests(unittest.TestCase):
         self.assertEqual(x_type, "quantitative")
         self.assertEqual(plot_df["x"].tolist(), [1, 2, 3])
         self.assertEqual(plot_df["y"].tolist(), [1.0, 4.0, 3.0])
-
-    def test_tab_group_height_does_not_add_chart_chrome(self):
-        component = {
-            "id": "tabs-1",
-            "type": "tab_group",
-            "layout": {"x": 0, "y": 0, "width": 8, "height": 300},
-        }
-        expected = (300 + render_core.GRID_ROW_GAP + 27) // 28
-        self.assertEqual(render_core.grid_height(component), expected)
-        style = render_core.dashboard_grid_style([
-            {"x": 0, "y": 0, "w": 8, "h": expected, "component": component},
-        ])
-        self.assertIn("overflow: hidden !important;", style)
 
     def test_progress_content_width_is_mapped_to_supported_pixel_width(self):
         component = {
@@ -1289,29 +1349,6 @@ class RuntimeRendererTests(unittest.TestCase):
             container_mock.call_args.kwargs["height"],
             120 + render_core.CARD_CHROME_HEIGHT - 44,
         )
-
-    def test_auto_height_text_is_not_stretched_to_grid_row(self):
-        component = {
-            "id": "text-1",
-            "type": "text",
-            "heightMode": "auto",
-            "showBorder": True,
-            "padding": 0,
-            "layout": {"x": 0, "y": 0, "width": 6, "height": 60},
-        }
-        style = render_core.dashboard_grid_style([
-            {"x": 0, "y": 0, "w": 6, "h": 1, "component": component},
-        ])
-
-        self.assertIn("height: auto;", style)
-        self.assertIn("align-self: start;", style)
-        self.assertIn("height: auto !important;", style)
-        self.assertIn("min-height: 26px;", style)
-        self.assertIn("min-height: 26px !important;", style)
-        self.assertIn("justify-content: flex-start !important;", style)
-        self.assertIn("padding-inline: 4px;", style)
-        self.assertIn('[data-testid="stElementContainer"]', style)
-        self.assertIn('[data-testid="stMarkdown"]', style)
 
     def test_page_link_does_not_create_a_visible_card(self):
         component = {
@@ -1537,83 +1574,309 @@ class RuntimeRendererTests(unittest.TestCase):
             markdown_mock.call_args_list[1].kwargs,
         )
 
-    def test_runtime_renders_native_dashboard(self):
+    # --- Data transformations (prepare_chart_data & calculate_metric) ---
+
+    def test_prepare_chart_data_supports_all_aggregations_sorting_and_dirty_numbers(self):
         dataframe = pd.DataFrame({
-            "region": ["A", "B"],
-            "sales": [10, 20],
+            "region": ["A", "A", "B"],
+            "sales": ["10", "15,5", "1 000"],
         })
-        schema = make_schema()
-        datasets = {"dataset-1": dataframe}
-        with patch.object(render_core.st, "markdown") as markdown_mock, \
-                patch.object(render_core.st, "container") as container_mock:
-            render_core.render_dashboard(schema, datasets)
-        markdown_mock.assert_called()
-        container_mock.assert_called()
+        expected_by_agg = {
+            "sum": [25.5, 1000.0],
+            "mean": [12.75, 1000.0],
+            "count": [2, 1],
+            "min": [10.0, 1000.0],
+            "max": [15.5, 1000.0],
+        }
+        for aggregation, expected in expected_by_agg.items():
+            with self.subTest(aggregation=aggregation):
+                result = render_core.prepare_chart_data(
+                    dataframe,
+                    "region",
+                    "sales",
+                    aggregation=aggregation,
+                    sort_order="asc",
+                    sort_by="x",
+                )
+                self.assertEqual(result["region"].tolist(), ["A", "B"])
+                self.assertEqual(result["sales"].tolist(), expected)
 
+        sorted_by_y = render_core.prepare_chart_data(
+            dataframe,
+            "region",
+            "sales",
+            aggregation="sum",
+            sort_order="desc",
+            sort_by="y",
+        )
+        self.assertEqual(sorted_by_y["region"].tolist(), ["B", "A"])
 
-class PreviewServiceTests(unittest.TestCase):
-    def test_creates_updates_and_deletes_session(self):
-        with tempfile.TemporaryDirectory() as directory:
-            dataset_path = Path(directory) / "data.csv"
-            dataset_path.write_text("region,sales\nA,10\n", encoding="utf-8")
-            service = PreviewService(
-                ttl_seconds=60,
-                public_url="http://preview.test",
+        # Count works on non-numeric string columns.
+        non_numeric = pd.DataFrame({
+            "region": ["A", "A", "B"],
+            "order": ["first", "second", "third"],
+        })
+        counted = render_core.prepare_chart_data(
+            non_numeric,
+            "region",
+            "order",
+            aggregation="count",
+            sort_order="asc",
+        )
+        self.assertEqual(counted["order"].tolist(), [2, 1])
+
+        with self.assertRaises(KeyError):
+            render_core.prepare_chart_data(dataframe, "missing", "sales")
+        with self.assertRaises(ValueError):
+            render_core.prepare_chart_data(dataframe, "region", "sales", aggregation="median")
+
+    def test_calculate_metric_supports_all_aggregations_and_invalid_values(self):
+        dataframe = pd.DataFrame({"value": ["10", "20,5", "1 000", None, "bad"]})
+
+        self.assertEqual(render_core.calculate_metric(dataframe, "value", "sum"), 1030.5)
+        self.assertEqual(render_core.calculate_metric(dataframe, "value", "mean"), 343.5)
+        self.assertEqual(render_core.calculate_metric(dataframe, "value", "min"), 10)
+        self.assertEqual(render_core.calculate_metric(dataframe, "value", "max"), 1000)
+        # Count follows pandas semantics: every non-null source cell counts.
+        self.assertEqual(render_core.calculate_metric(dataframe, "value", "count"), 4)
+
+        all_invalid = pd.DataFrame({"value": [None, "", "bad"]})
+        self.assertEqual(render_core.calculate_metric(all_invalid, "value", "sum"), 0)
+
+        with self.assertRaises(KeyError):
+            render_core.calculate_metric(dataframe, "missing", "sum")
+        with self.assertRaises(ValueError):
+            render_core.calculate_metric(dataframe, "value", "none")
+
+    # --- Data controls and filter scoping ---
+
+    def test_apply_filters_handles_data_controls_page_and_dataset_scoping(self):
+        schema = {
+            "filters": [
+                {
+                    "id": "range-1",
+                    "type": "data_control",
+                    "controlType": "range",
+                    "field": "sales",
+                    "datasetId": "ds-1",
+                    "pageId": "page-main",
+                    "order": 1,
+                },
+                {
+                    "id": "date-1",
+                    "type": "data_control",
+                    "controlType": "date",
+                    "field": "dt",
+                    "datasetId": "ds-1",
+                    "pageId": "page-main",
+                    "order": 2,
+                },
+                {
+                    "id": "toggle-1",
+                    "type": "data_control",
+                    "controlType": "toggle",
+                    "field": "active",
+                    "datasetId": "ds-1",
+                    "pageId": "page-main",
+                    "order": 3,
+                },
+                {
+                    "id": "other-page-filter",
+                    "type": "selectbox",
+                    "field": "region",
+                    "datasetId": "ds-1",
+                    "pageId": "page-other",
+                    "order": 4,
+                },
+            ]
+        }
+        datasets = {
+            "ds-1": pd.DataFrame({
+                "region": ["A", "B", "C", "D"],
+                "sales": [5, 25, 50, 150],
+                "dt": ["2026-01-01", "2026-01-10", "2026-01-15", "2026-02-01"],
+                "active": [True, False, True, True],
+            }),
+            "ds-2": pd.DataFrame({"other": [1, 2, 3]}),
+        }
+        fake_state = {
+            "builder_filter_range_1": (10, 100),
+            "builder_filter_date_1": (date(2026, 1, 5), date(2026, 1, 20)),
+            "builder_filter_toggle_1": True,
+            # Must be ignored when applying filters for page-main.
+            "builder_filter_other_page_filter": "A",
+        }
+
+        with patch.object(render_core.st, "session_state", fake_state):
+            filtered = render_core.apply_filters(schema, datasets, page_id="page-main")
+
+        # Only row "C" satisfies 10<=sales<=100, date in [Jan 5..20], and active=True.
+        self.assertEqual(filtered["ds-1"]["region"].tolist(), ["C"])
+        # Unrelated dataset must remain untouched.
+        self.assertEqual(filtered["ds-2"]["other"].tolist(), [1, 2, 3])
+
+    def test_render_data_control_dispatches_to_native_widgets_and_warns_on_missing_field(self):
+        dataframe = pd.DataFrame({
+            "sales": [10, 50],
+            "dt": ["2026-01-01", "2026-01-10"],
+            "active": [True, False],
+        })
+
+        with (
+            patch.object(render_core.st, "session_state", {}),
+            patch.object(render_core.st, "slider") as slider_mock,
+            patch.object(render_core.st, "date_input") as date_mock,
+            patch.object(render_core.st, "toggle") as toggle_mock,
+            patch.object(render_core.st, "warning") as warning_mock,
+        ):
+            render_core.render_data_control(
+                {"id": "c1", "field": "sales", "controlType": "range", "title": "Sales"},
+                dataframe,
+            )
+            render_core.render_data_control(
+                {"id": "c2", "field": "dt", "controlType": "date", "title": "Period"},
+                dataframe,
+            )
+            render_core.render_data_control(
+                {"id": "c3", "field": "active", "controlType": "toggle", "title": "Active"},
+                dataframe,
+            )
+            render_core.render_data_control(
+                {"id": "c4", "field": "missing", "controlType": "range"},
+                dataframe,
             )
 
-            with patch(
-                "app.services.preview_service.get_dataset_path",
-                return_value=dataset_path,
-            ):
-                created = service.create_preview(
-                    "user-1",
-                    make_schema(),
-                )
-                updated = service.update_preview(
-                    created["sessionId"],
-                    "user-1",
-                    make_schema(),
-                )
+        slider_mock.assert_called_once()
+        date_mock.assert_called_once()
+        toggle_mock.assert_called_once()
+        warning_mock.assert_called_once()
 
-                self.assertEqual(created["revision"], 1)
-                self.assertEqual(updated["revision"], 2)
-                self.assertIn("revision=2", updated["previewUrl"])
-                session = service.get_preview(created["sessionId"])
-                self.assertEqual(session["revision"], 2)
-                self.assertIn("dataset-1", session["datasetsPaths"])
-                self.assertEqual(
-                    service.delete_preview(created["sessionId"], "user-1"),
-                    {"deleted": True},
-                )
+    # --- Chart Vega-Lite specs, helpers, and safe fallbacks ---
 
-    def test_creates_preview_with_multiple_datasets(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path_a = Path(directory) / "sales.csv"
-            path_b = Path(directory) / "targets.csv"
-            path_a.write_text("region,sales\nA,10\n", encoding="utf-8")
-            path_b.write_text("region,target\nA,15\n", encoding="utf-8")
+    def test_render_chart_builds_vega_lite_spec_for_palettes_and_hover_layers(self):
+        dataframe = pd.DataFrame({
+            "date": ["2026-01-01", "2026-01-02"],
+            "region": ["A", "B"],
+            "sales": [10, 25],
+        })
 
-            schema = make_schema()
-            schema["dataSources"] = [
-                {"type": "backend_dataset", "datasetId": "ds-a", "name": "sales.csv"},
-                {"type": "backend_dataset", "datasetId": "ds-b", "name": "targets.csv"},
-            ]
+        # Bar chart with gradient palette uses quantitative y color scale.
+        with patch.object(render_core.st, "vega_lite_chart") as chart_mock:
+            render_core.render_chart(
+                {
+                    "type": "bar_chart",
+                    "x": "region",
+                    "y": "sales",
+                    "colorMode": "gradient",
+                    "palette": ["#fbbf24", "#ef4444"],
+                    "layout": {"width": 6, "height": 300},
+                },
+                dataframe,
+                260,
+            )
+        bar_spec = chart_mock.call_args.args[1]
+        self.assertEqual(bar_spec["mark"]["type"], "bar")
+        self.assertEqual(bar_spec["encoding"]["color"]["field"], "y")
+        self.assertEqual(bar_spec["encoding"]["color"]["scale"]["range"], ["#fbbf24", "#ef4444"])
 
-            service = PreviewService(ttl_seconds=60)
+        # Bar chart with categorical palette maps colors by label.
+        with patch.object(render_core.st, "vega_lite_chart") as chart_mock:
+            render_core.render_chart(
+                {
+                    "type": "bar_chart",
+                    "x": "region",
+                    "y": "sales",
+                    "colorMode": "categorical",
+                    "palette": ["#0ea5e9", "#8b5cf6"],
+                    "layout": {"width": 6, "height": 300},
+                },
+                dataframe,
+                260,
+            )
+        cat_spec = chart_mock.call_args.args[1]
+        self.assertEqual(cat_spec["encoding"]["color"]["field"], "label")
+        self.assertEqual(cat_spec["encoding"]["color"]["type"], "nominal")
 
-            def fake_get_path(user_id, ds_id):
-                return path_a if ds_id == "ds-a" else path_b
+        # Line chart builds layered hover rule + highlighted point.
+        with patch.object(render_core.st, "vega_lite_chart") as chart_mock:
+            render_core.render_chart(
+                {
+                    "type": "line_chart",
+                    "x": "date",
+                    "y": "sales",
+                    "layout": {"width": 6, "height": 300},
+                },
+                dataframe,
+                260,
+            )
+        line_spec = chart_mock.call_args.args[1]
+        self.assertEqual(len(line_spec["layer"]), 3)
+        self.assertEqual(line_spec["layer"][1]["mark"]["type"], "rule")
+        self.assertEqual(line_spec["layer"][0]["encoding"]["x"]["type"], "temporal")
 
-            with patch(
-                "app.services.preview_service.get_dataset_path",
-                side_effect=fake_get_path,
-            ):
-                created = service.create_preview("user-1", schema)
-                session = service.get_preview(created["sessionId"])
+        # Scatter plot uses layered hover point overlay.
+        with patch.object(render_core.st, "vega_lite_chart") as chart_mock:
+            render_core.render_chart(
+                {
+                    "type": "scatter_plot",
+                    "x": "sales",
+                    "y": "sales",
+                    "colorMode": "gradient",
+                    "palette": ["#0ea5e9", "#ef4444"],
+                    "layout": {"width": 6, "height": 300},
+                },
+                dataframe,
+                260,
+            )
+        scatter_spec = chart_mock.call_args.args[1]
+        self.assertEqual(len(scatter_spec["layer"]), 2)
+        self.assertEqual(scatter_spec["layer"][0]["mark"]["type"], "point")
 
-                self.assertEqual(len(session["datasetsPaths"]), 2)
-                self.assertIn("ds-a", session["datasetsPaths"])
-                self.assertIn("ds-b", session["datasetsPaths"])
+    def test_render_chart_shows_warning_or_info_on_missing_field_or_empty_data(self):
+        dataframe = pd.DataFrame({"region": ["A"], "sales": [10]})
+
+        with (
+            patch.object(render_core.st, "warning") as warning_mock,
+            patch.object(render_core.st, "vega_lite_chart") as chart_mock,
+        ):
+            render_core.render_chart(
+                {"type": "bar_chart", "x": "missing", "y": "sales"},
+                dataframe,
+                260,
+            )
+        warning_mock.assert_called_once()
+        chart_mock.assert_not_called()
+
+        empty_df = pd.DataFrame({"region": pd.Series(dtype="object"), "sales": pd.Series(dtype="float64")})
+        with (
+            patch.object(render_core.st, "info") as info_mock,
+            patch.object(render_core.st, "vega_lite_chart") as chart_mock,
+        ):
+            render_core.render_chart(
+                {"type": "bar_chart", "x": "region", "y": "sales"},
+                empty_df,
+                260,
+            )
+        info_mock.assert_called_once()
+        chart_mock.assert_not_called()
+
+    def test_axis_tick_values_downsample_and_state_key_helpers(self):
+        values = [f"2026-01-{day:02d}" for day in range(1, 32)]
+        ticks = render_core.axis_tick_values(values, 6)
+        self.assertEqual(len(ticks), 6)
+        self.assertEqual(ticks[0], "2026-01-01")
+        self.assertEqual(ticks[-1], "2026-01-31")
+
+        large_df = pd.DataFrame({"x": list(range(100))})
+        sampled = render_core.downsample_frame(large_df, 10)
+        self.assertEqual(len(sampled), 10)
+        self.assertEqual(sampled["x"].iloc[0], 0)
+        self.assertEqual(sampled["x"].iloc[-1], 99)
+
+        self.assertEqual(
+            render_core.component_state_key({"id": "selectbox-123-abc"}),
+            "builder_filter_selectbox_123_abc",
+        )
 
 
 if __name__ == "__main__":

@@ -88,6 +88,20 @@ docker build -t streamlit-builder-backend .
    python -B -m unittest discover -s tests -v
    ```
 
+7. Установка инструментов проверки кода и git-хуков (опционально, для разработки):
+   ```bash
+   pip install -r requirements-dev.txt
+   pre-commit install
+   pre-commit install --hook-type pre-push
+   ```
+   *(Хуки автоматически запускают `ruff` и `pyright` при `git commit`, а `unittest` — при `git push`.)*
+
+   Ручной запуск проверок:
+   ```bash
+   ruff check app tests
+   pyright
+   ```
+
 ---
 
 ## 🏗 Архитектура и хранение данных
@@ -802,7 +816,7 @@ app/
 ├── schemas/
 │   └── dashboard.py              → Pydantic v2 модели и валидация Dashboard Schema v2
 ├── utils/
-│   ├── data_transform.py         → фильтрация, агрегации, сортировка и расчёт метрик на Pandas
+│   ├── path_utils.py             → защита путей пользовательских директорий от path traversal
 │   └── schema_utils.py           → утилиты работы со схемой и строковыми литералами
 └── services/
     ├── auth_service.py           → JWT, Argon2 хеширование, storage/users/users.json
