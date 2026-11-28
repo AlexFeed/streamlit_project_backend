@@ -548,7 +548,7 @@ username=test@example.com&password=123456
   "sheets": ["Лист1", "Лист2"]
 }
 ```
-* **Response `400`:** `{"detail": "Файл не является книгой Excel (.xlsx, .xls)"}`
+* **Response `400`:** `{"detail": "File is not an Excel workbook (.xlsx, .xls)"}`
 
 ---
 

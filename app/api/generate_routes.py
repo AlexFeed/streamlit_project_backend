@@ -13,7 +13,7 @@ from app.services.generator_service import generate_streamlit_code
 
 router = APIRouter()
 
-# ГЕНЕРАЦИЯ STREAMLIT КОДА
+# STREAMLIT CODE GENERATION
 @router.post("/generate")
 async def generate_dashboard(payload: dict, current_user: Annotated[
     auth_service.User,

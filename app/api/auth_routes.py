@@ -15,7 +15,7 @@ class PasswordChangePayload(BaseModel):
     newPassword: str
 
 
-# УПРАВЛЕНИЕ LOGIN
+# LOGIN MANAGEMENT
 @router.post("/register")
 def register(payload: dict):
     email = payload.get("email")
@@ -32,7 +32,7 @@ def register(payload: dict):
 
 @router.post("/token")
 async def login(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]):
-    # В этом случае form_data.username хранит email пользователя
+    # In this case form_data.username stores the user's email
     return auth_service.login_user(email=form_data.username, password=form_data.password)
 
 @router.get("/me", response_model=auth_service.User)

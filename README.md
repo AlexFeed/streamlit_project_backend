@@ -548,7 +548,7 @@ Returns the list of sheet names from an uploaded Excel workbook (`.xlsx`, `.xls`
   "sheets": ["Sheet1", "Sheet2"]
 }
 ```
-* **Response `400`:** `{"detail": "Файл не является книгой Excel (.xlsx, .xls)"}`
+* **Response `400`:** `{"detail": "File is not an Excel workbook (.xlsx, .xls)"}`
 
 ---
 
